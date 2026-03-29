@@ -32,9 +32,6 @@ Austria's public services face rising and geographically uneven pressure from de
 - **Migration scenarios:** `src/estimate_migration_scenarios.py`
   Estimates historical net migration distributions and constructs the three scenarios from Statcube micro-data.
 
-- **Naturalisation:** `src/compute_naturalisation_rates.py`
-  Broadcasts NUTS-2 naturalisation rates to NUTS-3 using population shares.
-
 ### Sector Models
 
 | Sector | Script | Method |
@@ -45,7 +42,7 @@ Austria's public services face rising and geographically uneven pressure from de
 
 ### Robustness & Validation
 
-Each sector has dedicated robustness scripts (`src/robustness_education.py`, `src/robustness_healthcare.py`, `src/robustness_healthcare_extended.py`, `src/robustness_housing.py`) running 6–8 tests: overdispersion checks, leave-one-out cross-validation, temporal stability, and comparison to observed 2019 data.
+Each sector has dedicated robustness scripts (`src/robustness_education.py`, `src/robustness_healthcare.py`, `src/robustness_housing.py`) running 6–8 tests: overdispersion checks, leave-one-out cross-validation, temporal stability, and comparison to observed 2019 data.
 
 ---
 
@@ -65,24 +62,14 @@ Each sector has dedicated robustness scripts (`src/robustness_education.py`, `sr
 │   ├── model_healthcare_demand.py
 │   ├── model_housing_demand.py
 │   │
-│   ├── ── Visualisation & reporting ──
-│   ├── plot_maps.py
-│   ├── plot_demand_decomposition.py
-│   ├── plot_regional_analysis.py
-│   ├── generate_summary_tables.py
-│   ├── plot_methods_figures.py
-│   │
-│   ├── ── Robustness & calibration ──
+│   ├── ── Robustness ──
 │   ├── robustness_education.py
 │   ├── robustness_healthcare.py
-│   ├── robustness_healthcare_extended.py
 │   ├── robustness_housing.py
-│   ├── calibrate_fertility_mixing.py
 │   │
 │   └── ── Auxiliary ──
 │       ├── education_demand_percapita.py
-│       ├── housing_demand_percapita.py
-│       └── build_patient_dataset.py
+│       └── housing_demand_percapita.py
 │
 ├── Data/
 │   ├── Eurostat/                     # Mortality, fertility, sex ratios, net migration (CSV)
@@ -103,34 +90,22 @@ Each sector has dedicated robustness scripts (`src/robustness_education.py`, `sr
 Run all scripts from the **repository root** in the following order:
 
 ```bash
-# 1. Prepare naturalisation rates
-python src/compute_naturalisation_rates.py
-
-# 2. Build patient dataset (only needed if regenerating from raw hospital data)
-python src/build_patient_dataset.py
-
-# 3. Run baseline population projection
+# 1. Run baseline population projection
 python src/project_total_population.py
 
-# 4. Run foreign-born disaggregation
+# 2. Run foreign-born disaggregation
 python src/project_migrant_population.py
 
-# 5. Decompose into native/foreign components
+# 3. Decompose into native/foreign components
 python src/decompose_native_foreign.py
 
-# 6. Run sector demand models
+# 4. Run sector demand models
 python src/model_education_demand.py
 python src/model_healthcare_demand.py
 python src/model_housing_demand.py
-
-# 7. Generate visualisations and tables
-python src/plot_demand_decomposition.py
-python src/plot_regional_analysis.py
-python src/plot_maps.py
-python src/generate_summary_tables.py
 ```
 
-Pre-computed parquet outputs for steps 3–6 are already included in `PQT/`, so the visualisation scripts (step 7) can be run independently without re-running the full pipeline.
+Pre-computed parquet outputs for steps 1–4 are already included in `PQT/` and can be used directly without re-running the full pipeline.
 
 ---
 
