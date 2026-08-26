@@ -22,6 +22,8 @@ from patsy import dmatrix
 from itertools import combinations
 from scipy import stats as scipy_stats
 
+import config
+
 warnings.filterwarnings('ignore')
 
 # ==========================================
@@ -41,7 +43,7 @@ YEARS_HISTORIC = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]
 
 PATH_INPUT_RATIO = r'XLSX/df_ratio_nuts3_cob_shift_mod-type.csv'
 PATH_INPUT_TEACHERS = r'XLSX/df_tpers_st_nuts3_mod-type.csv'
-PATH_PROJECTION_PQT = r'PQT/negtest_projected_simEU_negtest_projected_mig_EU_2025_2051_h61_20251204_adjfert_adjasfr.parquet'
+PATH_PROJECTION_PQT = config.PATH_PROJECTION
 PATH_EXTRAPOLATION_2025 = r'Data/Statcube/population-2025_nuts3_agegroups_nat.csv'
 
 N_BOOTSTRAP = 200  # bootstrap replications (increase for final run)
@@ -406,7 +408,9 @@ def test2_str_sensitivity(df_ratio, df_teachers, df_projection, school_cols):
         multiplier = 1.0 + p
         # total_teachers ≈ total_students / (base_str * multiplier)
         # Approximate with national average STR
-        avg_str = str_by_year[str_by_year['Year'] == BASE_YEAR]['Student-to-teacher'].mean()
+        # National STR = base-year total students / total teachers (mass-conserving),
+        # replacing the unweighted mean of per-cell ratios (Jensen-biased divisor).
+        avg_str = base_tp['Students'].sum() / base_tp['Teachers'].sum()
         teachers = total_students_2050 / (avg_str * multiplier)
         if p == 0.0:
             baseline_teachers = teachers

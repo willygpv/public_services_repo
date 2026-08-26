@@ -21,6 +21,8 @@ from scipy import stats as scipy_stats
 from scipy.interpolate import CubicSpline
 from sklearn.linear_model import LinearRegression
 
+import config
+
 warnings.filterwarnings('ignore')
 
 # ==========================================
@@ -31,10 +33,7 @@ DEMAND_YEAR = 2050
 DEMOGRAPHIC_COLS = ['NUTS3', 'Age', 'Sex', 'Nationality']
 
 PATH_HISTORICAL = r'XLSX/df_hs_np_clean.csv'
-PATH_PROJECTION = (
-    r'PQT/negtest_projected_simEU_negtest_projected_mig_EU'
-    r'_2025_2051_h61_20251204_adjfert_adjasfr.parquet'
-)
+PATH_PROJECTION = config.PATH_PROJECTION
 PATH_OEROK = r'Data/OEROK/Budget_forecasts/OEROK_haushalt_filtered.xlsx'
 PATH_CLUSTERS = r'Data/OEROK/Budget_forecasts/nuts3_coding_adapted.xlsx'
 
