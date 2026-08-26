@@ -16,6 +16,8 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from patsy import dmatrix
 
+import config
+
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -190,10 +192,7 @@ def main() -> None:
     demand_year = 2050
 
     bed_days_path = r"XLSX/patients_full_factorial_2019.csv.gz"
-    projected_path = (
-        r"PQT/negtest_projected_simEU_negtest_projected_mig_EU"
-        r"_2025_2051_h61_20251204_adjfert_adjasfr.parquet"
-    )
+    projected_path = config.PATH_PROJECTION
     cohorts_out = r"XLSX/patient_cohorts_2019.csv"
 
     # ── 1. Bed-day data ───────────────────────────────────────────

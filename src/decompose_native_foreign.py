@@ -3,17 +3,20 @@
 Approximate Austrian/EU net migration simulation.
 
 Decomposes EUROPOP2019 total population projections into native (Austrian)
-and foreign-born components by subtracting simulated migrant populations
+and foreign-citizen components by subtracting simulated migrant populations
 and redistributing any resulting negative residuals via Gaussian weighting.
 
 Outputs
 -------
-1. ``projected`` CSV  – cell-level population by (year, geo, sex, age, scenario, Nationality)
-2. ``projected_all`` CSV – same as (1) but with IncomeGroup detail for migrants
+1. ``projected`` parquet  – cell-level population by (year, geo, sex, age, scenario, Nationality)
+2. ``projected_all`` parquet – same as (1) but with IncomeGroup detail for migrants
+
+The sector models read (1) by the name ``config.PATH_PROJECTION``, so the two
+halves of that hand-off are named from the same place.
 
 Usage
 -----
-    python approx_at_eu_netmig.py [--input PATH] [--eurostat PATH] [--outdir DIR]
+    python src/decompose_native_foreign.py [--input PATH] [--eurostat PATH] [--outdir DIR]
 """
 
 from __future__ import annotations
@@ -27,14 +30,16 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 
+import config
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants / defaults
 # ---------------------------------------------------------------------------
-DEFAULT_INPUT = "PQT/negtest_projected_mig_EU_2025_2051_h61_20251204_adjfert.parquet"
-DEFAULT_EUROSTAT = "PQT/projected_AT_EU_2025_2051_20251204_adjfert.parquet"
-DEFAULT_OUTDIR = "XLSX"
+DEFAULT_INPUT = config.PATH_MIGRANT_PROJECTION
+DEFAULT_EUROSTAT = config.PATH_TOTAL_POPULATION_ADJFERT
+DEFAULT_OUTDIR = "PQT"
 GAUSSIAN_SIGMA = 5.0
 
 
@@ -383,19 +388,24 @@ def save_outputs(
     input_path: str | Path,
     outdir: str | Path,
 ) -> tuple[Path, Path]:
-    """Write the two CSV outputs and return their paths."""
+    """Write the two parquet outputs and return their paths.
+
+    The names are derived from the input stem, so they carry the vintage of the
+    projection they were built from and match what config.PATH_PROJECTION spells
+    out for the sector models downstream.
+    """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     stem = Path(input_path).stem
-    path_projected = outdir / f"negtest_projected_simEU_{stem}_adjasfr-pyfile.csv"
-    path_projected_all = outdir / f"negtest_projected_simEU_{stem}_with_ig_adjasfr-pyfile.csv"
+    path_projected = outdir / f"negtest_projected_simEU_{stem}_adjasfr.parquet"
+    path_projected_all = outdir / f"negtest_projected_simEU_{stem}_with_ig_adjasfr.parquet"
 
     logger.info("Saving projected → %s", path_projected)
-    projected.to_csv(path_projected, index=False)
+    projected.to_parquet(path_projected, index=False)
 
     logger.info("Saving projected_all → %s", path_projected_all)
-    projected_all.to_csv(path_projected_all, index=False)
+    projected_all.to_parquet(path_projected_all, index=False)
 
     return path_projected, path_projected_all
 
@@ -417,7 +427,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outdir", default=DEFAULT_OUTDIR,
-        help="Directory for CSV outputs (default: %(default)s)",
+        help="Directory for parquet outputs (default: %(default)s)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",

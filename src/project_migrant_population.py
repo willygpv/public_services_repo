@@ -12,6 +12,8 @@ import itertools
 from datetime import datetime
 import warnings
 
+import config
+
 # Suppress warnings for cleaner output (optional, based on notebook behavior)
 warnings.filterwarnings('ignore')
 
@@ -22,13 +24,13 @@ INIT_YEAR = 2025
 END_YEAR = 2051
 
 # File Paths
-PATH_TOT_POP = r'PQT/projected_AT_EU_2025_2051_20251204.parquet'
+PATH_TOT_POP = config.PATH_TOTAL_POPULATION
 PATH_INIT_POP = r'XLSX/redistributed_ig_pop_2025.csv'
 PATH_MORTALITY = r'Data/Eurostat/mortality-AT_nuts3_age_sex_2019-2100.csv'
 PATH_FERTILITY = r'Data/Eurostat/fertility_adjusted-AT_nuts3_age_2019-2050-foreigners_adjusted.csv'
 PATH_SEX_RATIO = r'Data/Eurostat/sexratio-AT_nuts3_sex_2019-2050.csv'
-PATH_MIGRATION = r'PQT/dynres_net_migration_SensPreCrisis_SensCrisisEra_SensPostCovid_scenarios_20251203_123931.parquet'
-PATH_NATURALIZATION = r'XLSX/redistributed_nat_2024.csv'
+PATH_MIGRATION = config.PATH_MIGRATION_SCENARIOS
+PATH_NATURALIZATION = config.PATH_NATURALISATION
 
 # Output Paths
 PATH_OUT_XLSX = r'XLSX/'

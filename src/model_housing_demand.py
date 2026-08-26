@@ -31,6 +31,8 @@ from scipy.interpolate import CubicSpline
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 
+import config
+
 # Try importing optional dependencies (used in some smoothing / plotting paths)
 try:
     import cartogram
@@ -982,10 +984,7 @@ if __name__ == '__main__':
     # -----------------------------------------------------------------
     # 15b. Load population projections
     # -----------------------------------------------------------------
-    projected_path = (
-        r'PQT/negtest_projected_simEU_negtest_projected_mig_EU'
-        r'_2025_2051_h61_20251204_adjfert_adjasfr.parquet'
-    )
+    projected_path = config.PATH_PROJECTION
     projected_all = pd.read_parquet(projected_path)
     projected_all.rename(columns={
         'sex': 'Sex', 'age': 'Age', 'OBS_VALUE': 'Population',

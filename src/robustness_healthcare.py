@@ -21,6 +21,8 @@ import statsmodels.formula.api as smf
 from patsy import dmatrix
 from scipy import stats as scipy_stats
 
+import config
+
 warnings.filterwarnings('ignore')
 
 # ==========================================
@@ -32,10 +34,7 @@ N_BOOTSTRAP = 200
 N_MC_SIMS = 500
 
 BED_DAYS_PATH = r'XLSX/patients_full_factorial_2019.csv.gz'
-PROJECTED_PATH = (
-    r'XLSX/negtest_projected_simEU_negtest_projected_mig_EU'
-    r'_2025_2051_h61_20251204_adjfert_adjasfr.csv'
-)
+PROJECTED_PATH = config.PATH_PROJECTION
 
 FORMULA_ADDITIVE = "num_days ~ C(age_group) + C(sex) + C(Nationality) + C(NUTS2)"
 
@@ -83,7 +82,7 @@ def aggregate_cohorts(df):
 
 def load_projections():
     print("--- Loading population projections ---")
-    df = pd.read_csv(PROJECTED_PATH)
+    df = pd.read_parquet(PROJECTED_PATH)
     df = df.rename(columns={
         "OBS_VALUE": "Population", "geo": "NUTS3",
         "TIME_PERIOD": "year",

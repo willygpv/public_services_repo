@@ -21,6 +21,8 @@ import statsmodels.api as sm
 from patsy import dmatrix
 from pathlib import Path
 
+import config
+
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
@@ -38,8 +40,8 @@ PATH_INPUT_RATIO = r'XLSX/df_ratio_nuts3_cob_shift_mod-type.csv'
 PATH_INPUT_TEACHERS = r'XLSX/df_tpers_st_nuts3_mod-type.csv'
 PATH_GEOJSON = r'GEOJSON/NUTS_RG_03M_2024_3035.geojson'
 
-# Projection Input Path (UPDATED from new file)
-PATH_PROJECTION_PQT = r'PQT/negtest_projected_simEU_negtest_projected_mig_EU_2025_2051_h61_20251204_adjfert_adjasfr.parquet'
+# Projection Input Path (vintage set in config.py)
+PATH_PROJECTION_PQT = config.PATH_PROJECTION
 PATH_EXTRAPOLATION_2025 = r'Data/Statcube/population-2025_nuts3_agegroups_nat.csv'
 
 # Outputs
