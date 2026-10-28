@@ -1,28 +1,17 @@
-#!/usr/bin/env python
-# coding: utf-8
-"""
-Healthcare Demand — EU Scenarios (Data Pipeline)
-=================================================
-Loads patient bed-day data and population projections, fits a robust Poisson
-model, projects healthcare demand with Monte Carlo uncertainty, and saves
-the result as a parquet file.
-"""
-
-import os
+"""Poisson model of hospital bed-days on the 2019 patient data and projected bed-day demand. Needs the licensed patient file (see README)."""
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from patsy import dmatrix
+from scipy import stats
 
 import config
+import glm_cov
 
-
-# ── Helpers ───────────────────────────────────────────────────────────
 
 def print_column_summary(df: pd.DataFrame, max_unique: int | None = None) -> None:
-    """Print dtype, nunique, and sample unique values for every column."""
     for col in df.columns:
         uniques = df[col].unique()[:max_unique] if max_unique else df[col].unique()
         print(
@@ -33,7 +22,6 @@ def print_column_summary(df: pd.DataFrame, max_unique: int | None = None) -> Non
 
 
 def convert_age(age_str: str) -> int:
-    """Parse Eurostat age codes ('Y5', 'Y_LT1', 'Y_GE100') to integers."""
     if age_str == "Y_GE100":
         return 100
     if age_str == "Y_LT1":
@@ -42,23 +30,18 @@ def convert_age(age_str: str) -> int:
 
 
 def map_age_to_ag_id(df: pd.DataFrame, age_col: str = "age") -> pd.DataFrame:
-    """Map single-year ages to 19 standard 5-year age groups (1–19, where 19 = 90+)."""
     df = df.copy()
     df["age_group"] = ((df[age_col] // 5) + 1).clip(upper=19).astype(int)
     return df
 
 
-# ── Stage 1: Load & prepare patient bed-day data ─────────────────────
-
 def load_bed_days(path: str) -> pd.DataFrame:
-    """Load the full-factorial patient file and standardise column names."""
     df = pd.read_csv(path)
     df = df.rename(columns={"geo_2": "NUTS2", "ag_id": "age_group"})
     return df
 
 
 def build_cohorts(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate individual records into demographic cohorts."""
     cohort_features = ["year", "sex", "age_group", "Nationality", "NUTS2"]
     return (
         df
@@ -74,10 +57,7 @@ def build_cohorts(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-# ── Stage 2: Load & prepare population projections ───────────────────
-
 def load_projections(path: str, demand_year: int) -> pd.DataFrame:
-    """Load population projections, convert ages, aggregate to NUTS2."""
     df = pd.read_parquet(path)
     df = df.rename(columns={
         "OBS_VALUE": "Population",
@@ -96,7 +76,6 @@ def load_projections(path: str, demand_year: int) -> pd.DataFrame:
         ["Population"].sum()
     )
 
-    # Filter to demand horizon and aggregate NUTS3 → NUTS2
     df = df[df["year"] <= demand_year].copy()
     df["NUTS2"] = df["NUTS3"].str[:4]
 
@@ -108,13 +87,7 @@ def load_projections(path: str, demand_year: int) -> pd.DataFrame:
     )
 
 
-# ── Stage 3: Robust Poisson model ────────────────────────────────────
-
 def fit_robust_poisson(df: pd.DataFrame):
-    """
-    Fit a Poisson GLM with HC3 robust standard errors on aggregated
-    patient data.  Returns (df_agg, model_results).
-    """
     print("--- STARTING ROBUST POISSON WORKFLOW ---")
     print(f"1. Aggregating {len(df):,} rows...")
 
@@ -132,16 +105,19 @@ def fit_robust_poisson(df: pd.DataFrame):
     print(f"   -> Compressed to {len(df_agg):,} groups.")
 
     print("2. Fitting Poisson with Robust Standard Errors (HC3)...")
-    formula = "num_days ~ C(age_group) + C(sex) + C(Nationality) + C(NUTS2) + C(age_group):C(Nationality) + C(age_group):C(sex)"
+    formula = f"num_days ~ {config.HEALTHCARE_RHS}"
     model = smf.glm(
         formula=formula,
         data=df_agg,
         offset=np.log(df_agg["Population"]),
         family=sm.families.Poisson(),
-    ).fit(cov_type="HC3")
+    ).fit()
 
     print("   -> Robust Poisson Model Converged.")
-    print(model.summary().tables[1])
+    se = np.sqrt(np.diag(glm_cov.cov_hc3(model)))
+    z = model.params / se
+    print(pd.DataFrame({"coef": model.params, "se_HC3": se, "z": z,
+                        "P>|z|": 2 * stats.norm.sf(np.abs(z))}).to_string(float_format="%.4f"))
 
     print("\n3. Calculating Predicted Rates...")
     df_agg["predicted_bed_days_per_capita"] = model.predict(
@@ -151,77 +127,60 @@ def fit_robust_poisson(df: pd.DataFrame):
     return df_agg, model
 
 
-# ── Stage 4: Monte Carlo projection ──────────────────────────────────
-
 def project_with_uncertainty(
     df_proj: pd.DataFrame,
     df_agg: pd.DataFrame,
     model_results,
     n_simulations: int = 1000,
 ) -> pd.DataFrame:
-    """
-    Draw *n_simulations* coefficient vectors from the model's (robust)
-    sampling distribution and project bed-day demand for every row in
-    *df_proj*.  Adds Bed_Days_{Lower,Mean,Upper,Std} columns in-place.
-    """
     print(f"--- RUNNING {n_simulations} SIMULATIONS FOR ROBUSTNESS ---")
     np.random.seed(42)
-    
+
     params = model_results.params
-    cov_matrix = model_results.cov_params()
+    cov_matrix = glm_cov.cov_hc3(model_results)
     simulated_params = np.random.multivariate_normal(params, cov_matrix, n_simulations)
 
-    formula = "C(age_group) + C(sex) + C(Nationality) + C(NUTS2) + C(age_group):C(Nationality) + C(age_group):C(sex)"
-    X_proj = dmatrix(formula, df_proj, return_type="dataframe")
+    X_proj = dmatrix(config.HEALTHCARE_RHS, df_proj, return_type="dataframe")
+    assert list(X_proj.columns) == list(params.index), "projection design does not match the model"
 
     predicted_rates = np.exp(X_proj.values @ simulated_params.T)
     bed_days_matrix = predicted_rates * df_proj["Population"].values[:, None] / 365
 
     df_proj["Bed_Days_Lower"] = np.percentile(bed_days_matrix, 2.5, axis=1)
-    df_proj["Bed_Days_Mean"] = np.mean(bed_days_matrix, axis=1)
+    df_proj["Bed_Days_Mean"] = (np.exp(X_proj.values @ params.values)
+                                * df_proj["Population"].values / 365)
     df_proj["Bed_Days_Upper"] = np.percentile(bed_days_matrix, 97.5, axis=1)
     df_proj["Bed_Days_Std"] = np.std(bed_days_matrix, axis=1)
 
     return df_proj
 
 
-# ── Main ──────────────────────────────────────────────────────────────
-
 def main() -> None:
     base_year = 2019
     demand_year = 2050
 
-    bed_days_path = r"XLSX/patients_full_factorial_2019.csv.gz"
+    bed_days_path = config.PATH_PATIENTS
     projected_path = config.PATH_PROJECTION
-    cohorts_out = r"XLSX/patient_cohorts_2019.csv"
+    cohorts_out = config.PATH_PATIENT_COHORTS
 
-    # ── 1. Bed-day data ───────────────────────────────────────────
     df_bd = load_bed_days(bed_days_path)
 
-    # Cohort summary (side output)
     df_cohorts = build_cohorts(df_bd)
     print(df_cohorts.head())
     df_cohorts.to_csv(cohorts_out, index=False)
     print_column_summary(df_cohorts, max_unique=15)
 
-    # Keep only base year
     df_bd = df_bd[df_bd["year"] == base_year]
-    print_column_summary(df_bd)
 
-    # ── 2. Population projections ─────────────────────────────────
     df_proj = load_projections(projected_path, demand_year)
     print(df_proj.head())
     print_column_summary(df_proj)
 
-    # ── 3. Fit model ──────────────────────────────────────────────
     df_agg, model = fit_robust_poisson(df_bd)
 
-    # ── 4. Project demand ─────────────────────────────────────────
     df_bd_demand = project_with_uncertainty(df_proj, df_agg, model)
 
-    # ── 5. Save ───────────────────────────────────────────────────
-    filename_no_ext = os.path.splitext(os.path.basename(projected_path))[0]
-    output_path = f"PQT/healthcare_demand_{filename_no_ext}_clean.parquet"
+    output_path = config.PATH_HEALTHCARE_DEMAND
 
     df_bd_demand.to_parquet(output_path, index=False, compression="gzip")
     print(f"Saved to: {output_path}")

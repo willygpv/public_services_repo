@@ -1,26 +1,11 @@
-# Bulk and derived data is not published: projections and sector outputs are
-# hundreds of MB, and the hospital bed-day file is licensed microdata.
-Data/*
-PQT/*
-XLSX/*
+# Outputs of the pipeline
+PQT/
+XLSX/
+CSV/
 PNG/
+logs/
+temp_teacher_projection/
 __pycache__/
 
-# Re-included: the small, microdata-free inputs the published scripts need.
-# Each parent directory has to be re-included before a file inside it can be.
-!Data/Statcube/
-Data/Statcube/*
-!Data/Statcube/naturalisations-2013-2023_nuts2_sex_age_groups.csv
-!Data/export_labour_inputs/
-!XLSX/redistributed_ig_pop_2024.csv
-
-# The decomposed population projection: the output of steps 1-4 and the input to
-# every sector model. 36 MB, so it ships; the sector-model outputs it feeds are
-# hundreds of MB each and do not.
-!PQT/negtest_projected_simEU_negtest_projected_mig_EU_2025_2051_h61_20260721_adjfert_adjasfr.parquet
-
-# NEVER PUBLISH. Licensed patient-level hospital data. Listed last so that these
-# rules win over any re-inclusion added above, now or later.
-XLSX/patients_full_factorial_2019.csv.gz
-XLSX/patient_cohorts_2019.csv
-XLSX/patients_clean.csv.gz
+# Licensed hospital data: never commit
+*patient*
