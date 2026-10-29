@@ -18,7 +18,7 @@ From the repository root:
 bash run_pipeline.sh
 ```
 
-This runs the scripts in `src/` in order and takes about 30 minutes. Each script writes a log to `logs/`. Results are written to `PQT/`, `XLSX/` and `CSV/`, and the summary tables are in `logs/16_generate_summary_tables.log`.
+This runs the scripts in `src/` in order and takes about 40 minutes. Each script writes a log to `logs/`. Results are written to `PQT/`, `XLSX/` and `CSV/`, and the summary tables are in `logs/16_generate_summary_tables.log`.
 
 The hospital model uses the 2019 inpatient records of the Austrian Federal Ministry of Health. These data are licensed and not included here. With the file saved as `XLSX/patients_full_factorial_2019.csv.gz` the whole pipeline runs; without it, the run stops before the hospital model.
 
