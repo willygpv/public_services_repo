@@ -18,7 +18,7 @@ From the repository root:
 bash run_pipeline.sh
 ```
 
-This runs the scripts in `src/` in order and takes about 40 minutes. Each script writes a log to `logs/`. Results are written to `PQT/`, `XLSX/` and `CSV/`, and the summary tables are in `logs/16_generate_summary_tables.log`.
+This runs the scripts in `src/` in order and takes about 40 minutes. `ROBUSTNESS=1 bash run_pipeline.sh` also runs the robustness tests, which take about 40 minutes more. Each script writes a log to `logs/`. Results are written to `PQT/`, `XLSX/` and `CSV/`, and the summary tables are in `logs/16_generate_summary_tables.log`.
 
 The hospital model uses the 2019 inpatient records of the Austrian Federal Ministry of Health. These data are licensed and not included here. With the file saved as `XLSX/patients_full_factorial_2019.csv.gz` the whole pipeline runs; without it, the run stops before the hospital model.
 
@@ -37,6 +37,7 @@ The hospital model uses the 2019 inpatient records of the Austrian Federal Minis
 11. `age_standardised_ratio.py`: age-standardised utilisation ratios
 12. `demand_decomposition.py`, `regional_analysis.py`: decomposition of demand growth and regional regressions
 13. `generate_summary_tables.py`: summary tables
+14. `robustness_housing.py`, `robustness_education.py`, `robustness_healthcare.py`: robustness tests (results in their logs)
 
 `config.py` holds the file names, and `glm_cov.py` and `oerok_projection.py` are used by the models.
 

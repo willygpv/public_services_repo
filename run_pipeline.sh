@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs all steps in order from the repository root. Logs go to logs/.
 # Usage: bash run_pipeline.sh   (or PY=/path/to/python bash run_pipeline.sh)
+# ROBUSTNESS=1 bash run_pipeline.sh also runs the robustness tests.
 
 set -u
 cd "$(dirname "$0")"
@@ -26,6 +27,9 @@ STEPS=(
   regional_analysis
   generate_summary_tables
 )
+if [ "${ROBUSTNESS:-0}" = "1" ]; then
+  STEPS+=(robustness_housing robustness_education robustness_healthcare)
+fi
 
 n=0
 for s in "${STEPS[@]}"; do
