@@ -1,45 +1,23 @@
-#!/usr/bin/env python
-# coding: utf-8
+"""Robustness tests of the housing model."""
 
-"""
-Robustness Tests for Housing Demand Projection Model
-=====================================================
-Runs 8 robustness/sensitivity tests on the logit-HHFR housing model
-and prints structured results for analysis.
-
-Requirements: same environment as the main housing script.
-Place this file in the same directory as the main script so paths align.
-"""
-
-import os
-import gc
-import math
 import warnings
 import numpy as np
 import pandas as pd
-from scipy import stats as scipy_stats
-from scipy.interpolate import CubicSpline
-from sklearn.linear_model import LinearRegression
 
 import config
+from oerok_projection import load_oerok_reference
 
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# CONFIGURATION (must match main script)
-# ==========================================
 BASE_YEAR = 2022
 DEMAND_YEAR = 2050
 DEMOGRAPHIC_COLS = ['NUTS3', 'Age', 'Sex', 'Nationality']
 
 PATH_HISTORICAL = r'XLSX/df_hs_np_clean.csv'
 PATH_PROJECTION = config.PATH_PROJECTION
-PATH_OEROK = r'Data/OEROK/Budget_forecasts/OEROK_haushalt_filtered.xlsx'
 PATH_CLUSTERS = r'Data/OEROK/Budget_forecasts/nuts3_coding_adapted.xlsx'
+OEROK_YEARS = [2030, 2040, 2050]
 
-# ==========================================
-# TRANSFORMS (from main script)
-# ==========================================
 
 def logit_transform(hhfr_rate):
     rate = np.clip(hhfr_rate / 100.0, 1e-6, 1.0 - 1e-6)
@@ -56,26 +34,30 @@ def convert_age(age_str):
     return int(str(age_str).lstrip('Y'))
 
 
-def get_weighted_average_hhfr(df_subset):
+def get_weighted_average_hhfr(df_subset, cohort=False):
     heads = (df_subset['Population'] * df_subset['HHFR'] / 100.0).sum()
     total_pop = df_subset['Population'].sum()
-    return (heads / total_pop) * 100.0 if total_pop > 0 else 0.0
+    if total_pop > 0:
+        return (heads / total_pop) * 100.0
+    return df_subset['HHFR'].mean() if cohort and len(df_subset) else 0.0
 
 
-# ==========================================
-# DATA LOADING
-# ==========================================
+def two_way_anova_ss(df, value, factor_a, factor_b):
+    grand = df[value].mean()
+    ss_total = ((df[value] - grand) ** 2).sum()
+    ss_a = ((df.groupby(factor_a)[value].transform('mean') - grand) ** 2).sum()
+    ss_b = ((df.groupby(factor_b)[value].transform('mean') - grand) ** 2).sum()
+    return {'total': ss_total, 'a': ss_a, 'b': ss_b, 'ab': ss_total - ss_a - ss_b}
+
 
 def load_all_data():
     print("--- Loading all data ---")
 
-    # Historical
     df_hs = pd.read_csv(PATH_HISTORICAL)
     df_hs['scenario'] = 'BSL'
     print(f"  Historical: {len(df_hs):,} rows, years={sorted(df_hs['Year'].unique())}")
     print(f"  Regions: {df_hs['NUTS3'].nunique()}, Nationalities: {df_hs['Nationality'].unique()}")
 
-    # Population projections
     proj = pd.read_parquet(PATH_PROJECTION)
     proj.rename(columns={
         'sex': 'Sex', 'age': 'Age', 'OBS_VALUE': 'Population',
@@ -89,26 +71,16 @@ def load_all_data():
     proj = proj[proj['Year'] <= DEMAND_YEAR]
     print(f"  Projections: {len(proj):,} rows, scenarios={proj['scenario'].nunique()}")
 
-    # OEROK
-    oerok = pd.read_excel(PATH_OEROK)
-    if 'Kenn-zahl' in oerok.columns:
-        oerok = oerok.drop('Kenn-zahl', axis=1)
-    year_cols = [c for c in oerok.columns
-                 if (isinstance(c, (int, float)) and 2000 <= c <= 2100)
-                 or (isinstance(c, str) and c.isdigit() and 2000 <= int(c) <= 2100)]
-    id_cols = [c for c in oerok.columns if c not in year_cols]
-    oerok_long = pd.melt(oerok, id_vars=id_cols, value_vars=year_cols,
-                         var_name='Year', value_name='avg_household_size')
-    oerok_long['Year'] = pd.to_numeric(oerok_long['Year'], errors='coerce').astype('Int64')
-    oerok_long = oerok_long.dropna(subset=['Year'])
-    print(f"  OEROK: {len(oerok_long)} rows")
+    oerok_reference = load_oerok_reference(OEROK_YEARS)
+    hh = oerok_reference['households']
+    print(f"  OEROK: households {DEMAND_YEAR} = "
+          f"{hh.loc[hh['Year'] == DEMAND_YEAR, 'Households'].sum():,.0f}")
 
-    # Clusters
     cluster_df = pd.read_excel(PATH_CLUSTERS)
     cluster_mapping = dict(zip(cluster_df['Code'], cluster_df['Cluster']))
     print(f"  Clusters: {len(cluster_mapping)} regions -> {len(set(cluster_mapping.values()))} clusters")
 
-    return df_hs, proj, oerok_long, cluster_mapping
+    return df_hs, proj, oerok_reference, cluster_mapping
 
 
 def create_age_group_mapping():
@@ -142,13 +114,8 @@ def create_nuts3_oerok_mapping():
     }
 
 
-# ==========================================
-# CORE: TREND CALCULATION & PROJECTION
-# ==========================================
-
 def calculate_trends(df_hs, cluster_mapping, age_group_mapping,
                      start_year=2011, end_years=[2021, 2022]):
-    """Calculate logit-space HHFR trends between start_year and mean(end_years)."""
     df_start = df_hs[df_hs['Year'] == start_year].copy()
     df_end = df_hs[df_hs['Year'].isin(end_years)].copy()
 
@@ -185,37 +152,45 @@ def calculate_trends(df_hs, cluster_mapping, age_group_mapping,
             'Nationality': nat, 'trend_slope': slope,
             'hhfr_start': hhfr_start if not g_start.empty else np.nan,
             'hhfr_end': hhfr_end,
+            'pop_start': g_start['Population'].sum(),
+            'pop_end': g_end['Population'].sum(),
         })
     return pd.DataFrame(trends)
+
+
+def oerok_adjustment_factors(df_hhfr, oerok_reference, target_year):
+    pop = oerok_reference['population']
+    pop = pop[pop['Year'] == target_year][DEMOGRAPHIC_COLS + ['Population']]
+    oerok_hh = oerok_reference['households']
+    oerok_hh = oerok_hh[oerok_hh['Year'] == target_year].set_index('NUTS3')['Households']
+    merged = df_hhfr.merge(pop, on=DEMOGRAPHIC_COLS, how='inner')
+    model_hh = (merged['Population'] * merged['HHFR'] / 100).groupby(merged['NUTS3']).sum()
+    factors = (oerok_hh / model_hh).reindex(df_hhfr['NUTS3'].unique())
+    if factors.isna().any():
+        raise ValueError(f"No OEROK factor for {factors[factors.isna()].index.tolist()}")
+    return factors.clip(0.1, 5.0), model_hh, oerok_hh
 
 
 def project_dwellings(df_hs, df_proj, cluster_mapping, age_group_mapping,
                       df_trends, target_year, oerok_data=None,
                       use_trend=True, apply_oerok=True):
-    """
-    Project dwelling demand at target_year for one population scenario.
-    Returns total national dwellings.
-    """
-    # Base HHFR from weighted 2021/2022
     df_recent = df_hs[df_hs['Year'].isin([2021, 2022])].copy()
     cohort_cols = DEMOGRAPHIC_COLS
 
     base_stats = df_recent.groupby(cohort_cols).apply(
         lambda x: pd.Series({
-            'base_hhfr': get_weighted_average_hhfr(x),
+            'base_hhfr': get_weighted_average_hhfr(x, cohort=True),
             'Cluster': cluster_mapping.get(x['NUTS3'].iloc[0]),
             'AgeGroup': age_group_mapping.get(x['Age'].iloc[0]),
         })
     ).reset_index()
 
-    # Build trend lookup
     trend_lookup = {}
     if use_trend and df_trends is not None:
         for _, row in df_trends.iterrows():
             key = (row['Cluster'], row['AgeGroup'], row['Sex'], row['Nationality'])
             trend_lookup[key] = row['trend_slope']
 
-    # Project HHFR
     hhfr_proj = []
     for _, cohort in base_stats.iterrows():
         nuts3, age, sex, nat = cohort['NUTS3'], cohort['Age'], cohort['Sex'], cohort['Nationality']
@@ -238,37 +213,12 @@ def project_dwellings(df_hs, df_proj, cluster_mapping, age_group_mapping,
 
     df_hhfr = pd.DataFrame(hhfr_proj)
 
-    # Apply OEROK constraints if requested
     if apply_oerok and oerok_data is not None and use_trend:
-        nuts3_oerok = create_nuts3_oerok_mapping()
-        # Calculate current implied household size
-        latest_pop = df_hs[df_hs['Year'] == df_hs['Year'].max()][
-            ['NUTS3', 'Age', 'Sex', 'Nationality', 'Population', 'GQR']
-        ].copy()
-        merged_check = df_hhfr.merge(latest_pop, on=DEMOGRAPHIC_COLS, how='inner')
-        merged_check['households'] = merged_check['Population'] * merged_check['HHFR'] / 100
-        merged_check['private_pop'] = merged_check['Population'] * (1 - merged_check['GQR'].fillna(0))
-        regional = merged_check.groupby('NUTS3').agg(
-            households=('households', 'sum'), private_pop=('private_pop', 'sum')
-        ).reset_index()
-        regional['avg_hh_size'] = np.where(
-            regional['households'] > 0, regional['private_pop'] / regional['households'], 0
-        )
-        regional['OEROK_Region'] = regional['NUTS3'].map(nuts3_oerok)
-        oerok_targets = oerok_data[oerok_data['Year'] == target_year][
-            ['Region', 'avg_household_size']
-        ].copy()
-        oerok_targets.columns = ['OEROK_Region', 'target_size']
-        comparison = regional.merge(oerok_targets, on='OEROK_Region', how='inner')
-        adj_factors = {}
-        for _, row in comparison.iterrows():
-            if row['avg_hh_size'] > 0:
-                adj_factors[row['NUTS3']] = np.clip(row['avg_hh_size'] / row['target_size'], 0.1, 5.0)
-        df_hhfr['adj'] = df_hhfr['NUTS3'].map(adj_factors).fillna(1.0)
+        adj_factors, _, _ = oerok_adjustment_factors(df_hhfr, oerok_data, target_year)
+        df_hhfr['adj'] = df_hhfr['NUTS3'].map(adj_factors)
         df_hhfr['HHFR'] = np.clip(df_hhfr['HHFR'] * df_hhfr['adj'], 0, 100)
         df_hhfr.drop(columns=['adj'], inplace=True)
 
-    # Merge with population projection and compute dwellings
     proj_cells = df_proj[df_proj['Year'] == target_year].copy()
     merged = proj_cells.merge(df_hhfr, on=DEMOGRAPHIC_COLS, how='left')
     merged['HHFR'] = merged['HHFR'].fillna(0)
@@ -276,10 +226,6 @@ def project_dwellings(df_hs, df_proj, cluster_mapping, age_group_mapping,
 
     return merged['Dwellings'].sum(), df_hhfr
 
-
-# ==========================================
-# TEST 1: TREND ANCHOR SENSITIVITY
-# ==========================================
 
 def test1_trend_anchor(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -295,7 +241,6 @@ def test1_trend_anchor(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok
         '2011 -> 2022 only':              {'start': 2011, 'end': [2022]},
     }
 
-    # Check which years are available
     avail_years = sorted(df_hs['Year'].unique())
     print(f"  Available historical years: {avail_years}")
 
@@ -317,7 +262,6 @@ def test1_trend_anchor(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok
         print(f"  {name:>33s} {slopes.mean():12.5f} {slopes.std():12.5f} "
               f"{slopes.min():10.5f} {slopes.max():10.5f} {dwellings:16,.0f} ({change:+.2f}%)")
 
-    # Show distribution of slopes
     print(f"\n--- Trend Slope Distribution (Baseline config) ---")
     trends_base = calculate_trends(df_hs, cluster_mapping, age_group_mapping)
     print(f"  Total trend groups: {len(trends_base)}")
@@ -327,34 +271,36 @@ def test1_trend_anchor(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok
           f"({(trends_base['trend_slope'] < 0).mean() * 100:.1f}%)")
     print(f"  Zero slopes:        {(trends_base['trend_slope'] == 0).sum()}")
 
-    # Slopes by nationality
     print(f"\n--- Mean Slope by Nationality ---")
     for nat in trends_base['Nationality'].unique():
         sub = trends_base[trends_base['Nationality'] == nat]
         print(f"  {nat:>20s}: mean={sub['trend_slope'].mean():.5f}, "
               f"std={sub['trend_slope'].std():.5f}")
 
-    # Slopes by cluster
     print(f"\n--- Mean Slope by Cluster ---")
     for cl in sorted(trends_base['Cluster'].dropna().unique()):
         sub = trends_base[trends_base['Cluster'] == cl]
-        # FIX: Added str(cl) to handle integer Cluster IDs
         print(f"  {str(cl):>30s}: mean={sub['trend_slope'].mean():.5f}, "
               f"std={sub['trend_slope'].std():.5f}")
 
-    # HHFR start vs end
     print(f"\n--- HHFR Start (2011) vs End (2021.5): National Weighted Averages ---")
     for nat in trends_base['Nationality'].unique():
         sub = trends_base[trends_base['Nationality'] == nat].dropna(subset=['hhfr_start'])
         if not sub.empty:
-            print(f"  {nat:>20s}: start={sub['hhfr_start'].mean():.2f}, "
+            w_start = np.average(sub['hhfr_start'], weights=sub['pop_start'])
+            w_end = np.average(sub['hhfr_end'], weights=sub['pop_end'])
+            print(f"  {nat:>20s}: start={w_start:.2f}, "
+                  f"end={w_end:.2f}, "
+                  f"change={w_end - w_start:+.2f}")
+    print(f"  (weights: trend-group population, 2011 at the start, 2021+2022 at the end)")
+    print(f"  Unweighted means over the trend groups (each cluster x age group x sex counts once):")
+    for nat in trends_base['Nationality'].unique():
+        sub = trends_base[trends_base['Nationality'] == nat].dropna(subset=['hhfr_start'])
+        if not sub.empty:
+            print(f"  {nat:>20s}: unweighted start={sub['hhfr_start'].mean():.2f}, "
                   f"end={sub['hhfr_end'].mean():.2f}, "
                   f"change={sub['hhfr_end'].mean() - sub['hhfr_start'].mean():+.2f}")
 
-
-# ==========================================
-# TEST 2: ÖROK CONSTRAINT IMPACT
-# ==========================================
 
 def test2_oerok_impact(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -387,39 +333,24 @@ def test2_oerok_impact(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok
         print(f"  {name:>33s} {dw:15,.0f} {change:+14.2f}%")
         hhfr_results[name] = df_hhfr
 
-    # Regional comparison: constrained vs unconstrained
     print(f"\n--- Regional ÖROK Adjustment Factors ---")
-    # Compute adjustment factors
+    print(f"  (households in {DEMAND_YEAR} on ÖROK's projected population: "
+          f"unconstrained trend rates vs ÖROK)")
     nuts3_oerok = create_nuts3_oerok_mapping()
-    latest_pop = df_hs[df_hs['Year'] == df_hs['Year'].max()][
-        ['NUTS3', 'Age', 'Sex', 'Nationality', 'Population', 'GQR']
-    ].copy()
 
     df_hhfr_unc = hhfr_results.get('Trend unconstrained')
     if df_hhfr_unc is not None:
-        merged = df_hhfr_unc.merge(latest_pop, on=DEMOGRAPHIC_COLS, how='inner')
-        merged['hh'] = merged['Population'] * merged['HHFR'] / 100
-        merged['priv_pop'] = merged['Population'] * (1 - merged['GQR'].fillna(0))
-        reg = merged.groupby('NUTS3').agg(hh=('hh', 'sum'), pp=('priv_pop', 'sum')).reset_index()
-        reg['model_size'] = np.where(reg['hh'] > 0, reg['pp'] / reg['hh'], 0)
-        reg['OEROK_Region'] = reg['NUTS3'].map(nuts3_oerok)
-
-        oerok_targets = oerok_data[oerok_data['Year'] == DEMAND_YEAR][
-            ['Region', 'avg_household_size']
-        ].copy()
-        oerok_targets.columns = ['OEROK_Region', 'oerok_target']
-        reg = reg.merge(oerok_targets, on='OEROK_Region', how='left')
-        reg['adj_factor'] = np.where(reg['oerok_target'] > 0,
-                                     reg['model_size'] / reg['oerok_target'], 1.0)
+        factors, model_hh, oerok_hh = oerok_adjustment_factors(df_hhfr_unc, oerok_data, DEMAND_YEAR)
+        reg = pd.DataFrame({'model_hh': model_hh, 'oerok_hh': oerok_hh, 'adj_factor': factors})
         reg = reg.sort_values('adj_factor')
-        print(f"{'NUTS3':>8s} {'OEROK_Region':>30s} {'Model_HHsize':>14s} "
-              f"{'OEROK_target':>14s} {'Adj_factor':>12s}")
-        for _, r in reg.iterrows():
-            if pd.notna(r['oerok_target']):
-                print(f"  {r['NUTS3']:>6s} {str(r['OEROK_Region']):>30s} "
-                      f"{r['model_size']:14.3f} {r['oerok_target']:14.3f} {r['adj_factor']:12.3f}")
+        print(f"{'NUTS3':>8s} {'OEROK_Region':>30s} {'Model_HH':>14s} "
+              f"{'OEROK_HH':>14s} {'Adj_factor':>12s}")
+        for nuts3, r in reg.iterrows():
+            print(f"  {nuts3:>6s} {str(nuts3_oerok.get(nuts3)):>30s} "
+                  f"{r['model_hh']:14,.0f} {r['oerok_hh']:14,.0f} {r['adj_factor']:12.3f}")
+        print(f"  {'Total':>6s} {'':>30s} {reg['model_hh'].sum():14,.0f} "
+              f"{reg['oerok_hh'].sum():14,.0f} {reg['oerok_hh'].sum() / reg['model_hh'].sum():12.3f}")
 
-    # HHFR comparison by nationality
     print(f"\n--- Mean HHFR by Nationality: Constrained vs Unconstrained ---")
     for key_name, df_h in hhfr_results.items():
         for nat in df_h['Nationality'].unique():
@@ -427,10 +358,6 @@ def test2_oerok_impact(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok
             mean_hhfr = sub['HHFR'].mean()
             print(f"  {key_name:>35s} | {nat:>20s}: mean HHFR = {mean_hhfr:.3f}")
 
-
-# ==========================================
-# TEST 3: CLUSTER AGGREGATION SENSITIVITY
-# ==========================================
 
 def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -440,14 +367,12 @@ def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping
     one_scen = df_proj['scenario'].unique()[0]
     df_proj_one = df_proj[df_proj['scenario'] == one_scen]
 
-    # Config A: standard 5 clusters
     trends_cluster = calculate_trends(df_hs, cluster_mapping, age_group_mapping)
     dw_cluster, _ = project_dwellings(
         df_hs, df_proj_one, cluster_mapping, age_group_mapping,
         trends_cluster, DEMAND_YEAR, oerok_data, use_trend=True
     )
 
-    # Config B: national (single cluster)
     national_mapping = {k: 'National' for k in cluster_mapping}
     trends_national = calculate_trends(df_hs, national_mapping, age_group_mapping)
     dw_national, _ = project_dwellings(
@@ -455,7 +380,6 @@ def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping
         trends_national, DEMAND_YEAR, oerok_data, use_trend=True
     )
 
-    # Config C: region-level (each NUTS3 is its own cluster)
     region_mapping = {k: k for k in cluster_mapping}
     trends_region = calculate_trends(df_hs, region_mapping, age_group_mapping)
     dw_region, _ = project_dwellings(
@@ -473,7 +397,6 @@ def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping
         change = ((dw / dw_cluster) - 1) * 100
         print(f"  {label:>23s} {n_grp:10d} {dw:15,.0f} {change:+14.2f}%")
 
-    # Compare slope distributions
     print(f"\n--- Slope Distribution by Aggregation Level ---")
     for label, tr in [('National', trends_national), ('5 clusters', trends_cluster),
                       ('35 regions', trends_region)]:
@@ -481,10 +404,11 @@ def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping
         print(f"  {label:>12s}: mean={slopes.mean():.5f}, std={slopes.std():.5f}, "
               f"range=[{slopes.min():.5f}, {slopes.max():.5f}]")
 
-    # How much do cluster vs region slopes diverge?
     print(f"\n--- Slope Comparison: 5-Cluster vs Region-Level ---")
+    region_slopes = trends_region.rename(columns={'Cluster': 'NUTS3'})
+    region_slopes['Cluster'] = region_slopes['NUTS3'].map(cluster_mapping)
     merged = trends_cluster.merge(
-        trends_region, on=['AgeGroup', 'Sex', 'Nationality'],
+        region_slopes, on=['Cluster', 'AgeGroup', 'Sex', 'Nationality'],
         suffixes=('_cluster', '_region'), how='inner'
     )
     if not merged.empty:
@@ -492,11 +416,11 @@ def test3_cluster_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping
         mae = np.mean(np.abs(merged['trend_slope_cluster'] - merged['trend_slope_region']))
         print(f"  Correlation: {corr:.4f}")
         print(f"  MAE of slopes: {mae:.5f}")
+        rank_corr = merged['trend_slope_cluster'].corr(merged['trend_slope_region'],
+                                                        method='spearman')
+        print(f"  Pairs (region x own cluster): {len(merged)} of {len(trends_region)} region groups")
+        print(f"  Rank correlation (Spearman): {rank_corr:.4f}")
 
-
-# ==========================================
-# TEST 4: SMOOTHING METHOD SENSITIVITY
-# ==========================================
 
 def test4_smoothing_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -567,7 +491,6 @@ def test4_smoothing_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mappi
         print(f"  {name:>18s} {dw:15,.0f} {change:+14.2f}% "
               f"{df_h['HHFR'].mean():10.3f} {df_h['HHFR'].std():10.3f}")
 
-    # Show discontinuity metric: mean absolute age-to-age HHFR jump
     print(f"\n--- Age-to-Age Discontinuity (Mean Absolute HHFR Jump) ---")
     for name, method, strength in configs:
         if method == 'none':
@@ -585,10 +508,6 @@ def test4_smoothing_sensitivity(df_hs, df_proj, cluster_mapping, age_group_mappi
         print(f"  {name:>18s}: mean_jump={mean_jump:.4f}, max_jump={max_jump:.2f}")
 
 
-# ==========================================
-# TEST 5: NATIONALITY HHFR DECOMPOSITION
-# ==========================================
-
 def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
     print("TEST 5: NATIONALITY HHFR DECOMPOSITION AND CONVERGENCE COUNTERFACTUAL")
@@ -598,13 +517,11 @@ def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_m
     one_scen = df_proj['scenario'].unique()[0]
     df_proj_one = df_proj[df_proj['scenario'] == one_scen]
 
-    # Actual projection
     dw_actual, df_hhfr_actual = project_dwellings(
         df_hs, df_proj_one, cluster_mapping, age_group_mapping,
         trends, DEMAND_YEAR, oerok_data, use_trend=True
     )
 
-    # HHFR profiles by nationality
     print(f"\n--- HHFR Profiles by Nationality and Age (base period, pop-weighted) ---")
     df_recent = df_hs[df_hs['Year'].isin([2021, 2022])].copy()
     age_group_map_5yr = {}
@@ -645,7 +562,6 @@ def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_m
             print(f" {vals[1]/vals[0]:8.3f}", end='')
         print()
 
-    # Counterfactual: set foreign HHFR = Austrian HHFR
     print(f"\n--- Counterfactual: Foreign HHFR = Austrian HHFR ---")
     df_hhfr_cf = df_hhfr_actual.copy()
     austrian_hhfr = df_hhfr_cf[df_hhfr_cf['Nationality'] == 'Austria'][
@@ -665,7 +581,6 @@ def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_m
     merged_cf['HHFR'] = merged_cf['HHFR'].fillna(0)
     dw_cf = (merged_cf['Population'] * merged_cf['HHFR'] / 100).sum()
 
-    # Actual by nationality
     merged_actual = proj_cells.merge(
         df_hhfr_actual[DEMOGRAPHIC_COLS + ['HHFR']], on=DEMOGRAPHIC_COLS, how='left'
     )
@@ -681,7 +596,6 @@ def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_m
     print(f"  Counterfactual:      {dw_cf:,.0f}")
     print(f"  Difference:          {dw_cf - dw_actual:+,.0f} ({(dw_cf/dw_actual - 1)*100:+.2f}%)")
 
-    # Implied household sizes by nationality
     print(f"\n--- Implied Avg Persons per Dwelling by Nationality (2050, one scenario) ---")
     for nat in merged_actual['Nationality'].unique():
         sub = merged_actual[merged_actual['Nationality'] == nat]
@@ -692,68 +606,49 @@ def test5_nationality_decomposition(df_hs, df_proj, cluster_mapping, age_group_m
                   f"(pop={total_pop:,.0f}, dw={total_dw:,.0f})")
 
 
-# ==========================================
-# TEST 6: STATUS-QUO vs TREND DIVERGENCE
-# ==========================================
-
 def test6_sq_vs_trend(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
     print("TEST 6: STATUS-QUO vs TREND DIVERGENCE ACROSS SCENARIOS (OPTIMIZED)")
     print("=" * 80)
 
-    # 1. Calculate the Rate Tables ONCE (They are independent of population scenarios)
     print("  Calculating HHFR rates (Trend & SQ)...")
     trends = calculate_trends(df_hs, cluster_mapping, age_group_mapping)
-    
-    # We use a dummy single-scenario slice just to satisfy the function signature
+
     one_scen = df_proj['scenario'].unique()[0]
     df_proj_dummy = df_proj[df_proj['scenario'] == one_scen]
 
-    # Get Trend Rates
     _, df_hhfr_trend = project_dwellings(
         df_hs, df_proj_dummy, cluster_mapping, age_group_mapping,
         trends, DEMAND_YEAR, oerok_data, use_trend=True, apply_oerok=True
     )
-    
-    # Get Status Quo Rates
+
     _, df_hhfr_sq = project_dwellings(
         df_hs, df_proj_dummy, cluster_mapping, age_group_mapping,
         trends, DEMAND_YEAR, oerok_data, use_trend=False, apply_oerok=False
     )
 
-    # 2. Prepare Population Data (All Scenarios at once)
     print("  Filtering population data for target year...")
-    # Filter only the year we need (massive speedup)
     pop_target = df_proj[df_proj['Year'] == DEMAND_YEAR].copy()
-    
-    # 3. Merge Rates onto Population
+
     print("  Merging rates and calculating dwellings...")
-    # Rename columns to distinct names
     rates_trend = df_hhfr_trend[DEMOGRAPHIC_COLS + ['HHFR']].rename(columns={'HHFR': 'HHFR_trend'})
     rates_sq = df_hhfr_sq[DEMOGRAPHIC_COLS + ['HHFR']].rename(columns={'HHFR': 'HHFR_sq'})
-    
-    # Merge Trend Rates
+
     merged = pop_target.merge(rates_trend, on=DEMOGRAPHIC_COLS, how='left')
-    # Merge SQ Rates
     merged = merged.merge(rates_sq, on=DEMOGRAPHIC_COLS, how='left')
-    
-    # Fill NAs (regions/ages not in HHFR map get 0)
+
     merged['HHFR_trend'] = merged['HHFR_trend'].fillna(0)
     merged['HHFR_sq'] = merged['HHFR_sq'].fillna(0)
-    
-    # Calculate Dwellings for every row
+
     merged['Dw_trend'] = merged['Population'] * merged['HHFR_trend'] / 100.0
     merged['Dw_sq']    = merged['Population'] * merged['HHFR_sq']    / 100.0
 
-    # 4. Aggregate by Scenario
     print("  Aggregating results...")
     df_res = merged.groupby('scenario')[['Dw_trend', 'Dw_sq']].sum().reset_index()
-    
-    # Calculate differences
+
     df_res['Diff'] = df_res['Dw_trend'] - df_res['Dw_sq']
     df_res['Diff_pct'] = ((df_res['Dw_trend'] / df_res['Dw_sq']) - 1) * 100
 
-    # 5. Report
     print(f"\n--- Status-Quo vs Trend at {DEMAND_YEAR} ---")
     print(f"  Scenarios:           {len(df_res)}")
     print(f"  Mean Dw (trend):     {df_res['Dw_trend'].mean():,.0f}")
@@ -768,9 +663,6 @@ def test6_sq_vs_trend(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_
 
     return df_res
 
-# ==========================================
-# TEST 7: LEAVE-ONE-CLUSTER-OUT
-# ==========================================
 
 def test7_leave_cluster_out(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -783,37 +675,34 @@ def test7_leave_cluster_out(df_hs, df_proj, cluster_mapping, age_group_mapping, 
     one_scen = df_proj['scenario'].unique()[0]
     df_proj_one = df_proj[df_proj['scenario'] == one_scen]
 
-    # Reference: full model
     trends_full = calculate_trends(df_hs, cluster_mapping, age_group_mapping)
     dw_full, _ = project_dwellings(
         df_hs, df_proj_one, cluster_mapping, age_group_mapping,
         trends_full, DEMAND_YEAR, oerok_data, use_trend=True
     )
 
+    dw_full_nat = dw_full
+
     results = []
     for held_out_cluster in clusters:
-        # Regions in the held-out cluster
         held_out_regions = [k for k, v in cluster_mapping.items() if v == held_out_cluster]
 
-        # Create modified mapping: held-out regions get the "rest" average
-        modified_mapping = {
-            k: ('REST' if v == held_out_cluster else v)
+        est_mapping = {
+            k: ('POOL' if v != held_out_cluster else v)
             for k, v in cluster_mapping.items()
         }
+        trends_est = calculate_trends(df_hs, est_mapping, age_group_mapping)
+        trends_pool = trends_est[trends_est['Cluster'] == 'POOL']
 
-        trends_mod = calculate_trends(df_hs, modified_mapping, age_group_mapping)
+        pool_mapping = {k: 'POOL' for k in cluster_mapping}
 
-        # Project only for the held-out regions
         df_proj_held = df_proj_one[df_proj_one['NUTS3'].isin(held_out_regions)]
-        df_proj_rest = df_proj_one[~df_proj_one['NUTS3'].isin(held_out_regions)]
 
-        # Held-out regions use REST trends
         dw_held, _ = project_dwellings(
-            df_hs, df_proj_held, modified_mapping, age_group_mapping,
-            trends_mod, DEMAND_YEAR, oerok_data, use_trend=True
+            df_hs, df_proj_held, pool_mapping, age_group_mapping,
+            trends_pool, DEMAND_YEAR, oerok_data, use_trend=True
         )
 
-        # Compare with full model for same regions
         dw_held_full, _ = project_dwellings(
             df_hs, df_proj_held, cluster_mapping, age_group_mapping,
             trends_full, DEMAND_YEAR, oerok_data, use_trend=True
@@ -821,25 +710,30 @@ def test7_leave_cluster_out(df_hs, df_proj, cluster_mapping, age_group_mapping, 
 
         pct_diff = ((dw_held / dw_held_full) - 1) * 100 if dw_held_full > 0 else 0
 
+        dw_nat_loco = dw_full_nat - dw_held_full + dw_held
+        nat_diff = ((dw_nat_loco / dw_full_nat) - 1) * 100 if dw_full_nat > 0 else 0
+
         results.append({
             'Held_Out_Cluster': held_out_cluster,
             'N_regions': len(held_out_regions),
             'Dw_full_model': dw_held_full,
-            'Dw_rest_trends': dw_held,
+            'Dw_pooled_other_trends': dw_held,
             'Diff_pct': pct_diff,
+            'National_full': dw_full_nat,
+            'National_LOCO': dw_nat_loco,
+            'National_Diff_pct': nat_diff,
         })
 
     df_res = pd.DataFrame(results)
     print(f"\n--- Leave-One-Cluster-Out Results ---")
-    print(df_res.to_string(index=False, float_format='%.2f'))
-    print(f"\nMean absolute difference: {df_res['Diff_pct'].abs().mean():.2f}%")
+    print(df_res.to_string(index=False, float_format=lambda x: f'{x:,.2f}'))
+    print(f"\nMean absolute difference (held-out regions): {df_res['Diff_pct'].abs().mean():.2f}%")
     print(f"Max absolute difference:  {df_res['Diff_pct'].abs().max():.2f}% "
           f"({df_res.loc[df_res['Diff_pct'].abs().idxmax(), 'Held_Out_Cluster']})")
+    print(f"National total: mean absolute difference {df_res['National_Diff_pct'].abs().mean():.3f}%, "
+          f"max {df_res['National_Diff_pct'].abs().max():.3f}% "
+          f"({df_res.loc[df_res['National_Diff_pct'].abs().idxmax(), 'Held_Out_Cluster']})")
 
-
-# ==========================================
-# TEST 8: VARIANCE DECOMPOSITION
-# ==========================================
 
 def test8_variance_decomposition(df_hs, df_proj, cluster_mapping, age_group_mapping, oerok_data):
     print("\n" + "=" * 80)
@@ -875,32 +769,17 @@ def test8_variance_decomposition(df_hs, df_proj, cluster_mapping, age_group_mapp
     df_res = pd.DataFrame(results)
 
     grand_mean = df_res['Dwellings'].mean()
-    total_var = df_res['Dwellings'].var()
-
-    # Demographic variance
     scen_means = df_res.groupby('scenario')['Dwellings'].mean()
-    var_demo = scen_means.var()
-
-    # Behavioral variance
     beh_means = df_res.groupby('Behavioral')['Dwellings'].mean()
-    var_beh = beh_means.var()
 
-    var_interaction = max(0, total_var - var_demo - var_beh)
-    total_decomp = var_demo + var_beh + var_interaction
+    ss = two_way_anova_ss(df_res, 'Dwellings', 'scenario', 'Behavioral')
 
-    if total_decomp > 0:
-        share_demo = var_demo / total_decomp * 100
-        share_beh = var_beh / total_decomp * 100
-        share_int = var_interaction / total_decomp * 100
-    else:
-        share_demo = share_beh = share_int = 0
-
-    print(f"\n--- Variance Decomposition at {DEMAND_YEAR} ---")
+    print(f"\n--- Variance Decomposition at {DEMAND_YEAR} (two-way ANOVA, sums of squares) ---")
     print(f"  Grand mean:                      {grand_mean:,.0f}")
-    print(f"  Total variance:                  {total_var:,.0f}")
-    print(f"  Var(Demographic Scenario):       {var_demo:,.0f} ({share_demo:.1f}%)")
-    print(f"  Var(Behavioral Model):           {var_beh:,.0f} ({share_beh:.1f}%)")
-    print(f"  Var(Interaction):                {var_interaction:,.0f} ({share_int:.1f}%)")
+    print(f"  Total sum of squares:            {ss['total']:,.0f}")
+    print(f"  Demographic scenario:            {ss['a']:,.0f} ({ss['a'] / ss['total'] * 100:.1f}%)")
+    print(f"  Behavioral model:                {ss['b']:,.0f} ({ss['b'] / ss['total'] * 100:.1f}%)")
+    print(f"  Interaction (residual):          {ss['ab']:,.0f} ({ss['ab'] / ss['total'] * 100:.2f}%)")
 
     print(f"\n--- Range by Source ---")
     print(f"  Demographic range:  [{scen_means.min():,.0f}, {scen_means.max():,.0f}] "
@@ -908,13 +787,11 @@ def test8_variance_decomposition(df_hs, df_proj, cluster_mapping, age_group_mapp
     print(f"  Behavioral range:   [{beh_means.min():,.0f}, {beh_means.max():,.0f}] "
           f"(span: {beh_means.max() - beh_means.min():,.0f})")
 
-    # As % of grand mean
     demo_span_pct = (scen_means.max() - scen_means.min()) / grand_mean * 100
     beh_span_pct = (beh_means.max() - beh_means.min()) / grand_mean * 100
     print(f"\n  Demographic span as % of mean: {demo_span_pct:.1f}%")
     print(f"  Behavioral span as % of mean:  {beh_span_pct:.1f}%")
 
-    # Top/bottom scenarios
     print(f"\n--- Top/Bottom 5 Demographic Scenarios ---")
     sorted_scen = scen_means.sort_values()
     print("  Bottom 5:")
@@ -926,10 +803,6 @@ def test8_variance_decomposition(df_hs, df_proj, cluster_mapping, age_group_mapp
 
     return df_res
 
-
-# ==========================================
-# MAIN
-# ==========================================
 
 def main():
     print("=" * 80)

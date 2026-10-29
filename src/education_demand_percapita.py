@@ -1,41 +1,24 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-"""
-Education Demand Analysis Script
-Refactored from Jupyter Notebook
-Date: 2026-02-04
-"""
+"""Pupils and teachers 2015-2023 by NUTS 3 region, school type, age and nationality, from the district tables, with enrolment and student-to-teacher ratios."""
 
 import os
 import logging
-import math
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy.stats import shapiro, levene
 import warnings
 
-# Suppress specific pandas warnings for cleaner output
-warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings('ignore', category=getattr(pd.errors, 'SettingWithCopyWarning', Warning))
 
-# ==========================================
-# 1. CONFIGURATION & CONSTANTS
-# ==========================================
 
 BASE_YEAR = 2023
-YEARS = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]  # missing 2016
+YEARS = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]
 
-# File Paths
 PATH_GEOJSON = r'GEOJSON/NUTS_RG_03M_2024_3035.geojson'
 PATH_POPULATION_TEMPLATE = "Data/Statcube/population-{year}_nuts3_agegroups_nat.csv"
 PATH_PUPIL_FOLDER_TEMPLATE = r'Data/Statcube/pupils_from_2006-{year}_schooltype_age_bezirk_ATF'
 PATH_TEACHER_TEMPLATE = r'Data/Statcube/teaching_staff-{}_schooltype_bezirk.csv'
 PATH_OUTPUT_XLSX = r'XLSX'
 
-# Mappings
 COLUMN_MAP_POP = {
     'Values': ['Values', 'Merkmale'],
     'Population': ['Number', 'Anzahl'],
@@ -73,13 +56,13 @@ DISTRICT_TO_NUTS3 = {
 }
 
 TWO_NUTS3 = {
-    '306': ['AT122', 'AT127'],  # Baden
-    '802': ['AT342', 'AT341'],  # Bregenz
-    '416': ['AT312', 'AT313'],  # Urfahr-Umgebung
-    '319': ['AT123', 'AT126'],  # Sankt Pölten(Land)
-    '316': ['AT125', 'AT126'],  # Mistelbach
-    '308': ['AT125', 'AT126'],  # Gänserndorf
-    '324': ['AT126', 'AT127']   # Wien-Umgebung
+    '306': ['AT122', 'AT127'],
+    '802': ['AT342', 'AT341'],
+    '416': ['AT312', 'AT313'],
+    '319': ['AT123', 'AT126'],
+    '316': ['AT125', 'AT126'],
+    '308': ['AT125', 'AT126'],
+    '324': ['AT126', 'AT127']
 }
 
 VIENNA_REPLACE_DICT = {
@@ -109,19 +92,9 @@ VIENNA_REPLACE_DICT = {
 }
 
 
-# ==========================================
-# 2. POPULATION FUNCTIONS
-# ==========================================
-
 def load_and_clean_population_data(file_path):
-    """Load and clean population data from a CSV file."""
-    try:
-        df = pd.read_csv(file_path, skiprows=8, encoding='latin-1')
-    except FileNotFoundError:
-        print(f"Warning: File not found at {file_path}. Skipping.")
-        return None
+    df = pd.read_csv(file_path, skiprows=8, encoding='latin-1')
 
-    # Dynamic Column Renaming
     rename_dict = {}
     for standard_name, possible_names in COLUMN_MAP_POP.items():
         for name in possible_names:
@@ -132,9 +105,8 @@ def load_and_clean_population_data(file_path):
 
     essential_cols = ['Values', 'Population', 'Year', 'NUTS3', 'Age', 'Nationality']
     if not all(col in df.columns for col in essential_cols):
-        return None
+        raise ValueError(f"{file_path} lacks columns {[c for c in essential_cols if c not in df.columns]}")
 
-    # Cleaning
     symbol_index_series = df[df['Values'] == "Symbol"].index
     if not symbol_index_series.empty:
         df = df.iloc[:symbol_index_series[0]]
@@ -168,13 +140,9 @@ def get_population_data(years):
             df_pop = pd.concat([df_pop, df_cleaned], ignore_index=True)
 
     df_pop = df_pop.groupby(['Year', 'NUTS3', 'Age', 'Nationality'], as_index=False)['Population'].sum()
-    print('2022 population after cleaning dataset ', df_pop[df_pop['Year'] == 2015]['Population'].sum())
+    print('Population (Year == 2015) after cleaning dataset ', df_pop[df_pop['Year'] == 2015]['Population'].sum())
     return df_pop
 
-
-# ==========================================
-# 3. GIS/GEOMETRY FUNCTIONS
-# ==========================================
 
 def load_geometries():
     print("--- Loading Geometries ---")
@@ -185,27 +153,40 @@ def load_geometries():
         return at_gdf
     except Exception as e:
         print(f"Error loading GeoJSON: {e}")
-        return None
+        raise
 
 
-# ==========================================
-# 4. PUPIL DATA FUNCTIONS
-# ==========================================
+def check_pupil_files_complete(years):
+    codes = {}
+    vienna_districts = {str(c) for c in range(901, 924)}
+    for year in years:
+        folder_path = PATH_PUPIL_FOLDER_TEMPLATE.format(year=year)
+        if not os.path.exists(folder_path):
+            raise FileNotFoundError(f"Pupil folder missing for {year}: {folder_path}")
+        found = {f.rsplit('_', 1)[-1][:-4] for f in os.listdir(folder_path) if f.endswith('.csv')}
+        if 'Vienna' not in found and not vienna_districts <= found:
+            raise FileNotFoundError(
+                f"Vienna pupil data missing for {year}: {sorted(vienna_districts - found)}")
+        if 'Vienna' in found and vienna_districts & found:
+            raise ValueError(f"Both _Vienna.csv and Vienna district files for {year}: Vienna would count twice")
+        codes[year] = {c for c in found if c.isdigit() and not c.startswith('9')}
+    expected = {k for k in list(DISTRICT_TO_NUTS3) + list(TWO_NUTS3) if k.isdigit() and not k.startswith('9')}
+    expected |= set().union(*codes.values()) if codes else set()
+    missing = {year: sorted(expected - found) for year, found in codes.items() if expected - found}
+    if missing:
+        raise FileNotFoundError(f"Pupil district files missing: {missing}")
+
 
 def load_and_process_pupil_data(years):
     print("--- Loading Pupil Data ---")
+    check_pupil_files_complete(years)
     dfs = []
 
     for year in years:
         folder_path = PATH_PUPIL_FOLDER_TEMPLATE.format(year=year)
-        if not os.path.exists(folder_path):
-            print(f"Folder not found: {folder_path}")
-            continue
-
         for file_name in os.listdir(folder_path):
             if file_name.endswith('.csv'):
                 file_path = os.path.join(folder_path, file_name)
-                # print(file_name) # Verbose logging suppressed
 
                 df = pd.read_csv(file_path, skiprows=8, encoding='latin-1', delimiter=',')
                 if 'Counting' in df.columns:
@@ -229,9 +210,9 @@ def load_and_process_pupil_data(years):
                                  'Schultyp Gruppen', 'Number']
                 relevant_cols.insert(5, 'Bundesland' if is_vienna else 'Politischer Bezirk')
 
-                # Ensure columns exist before filtering
                 if not all(col in df.columns for col in relevant_cols):
-                    continue
+                    raise ValueError(f"{file_path} lacks columns "
+                                     f"{[c for c in relevant_cols if c not in df.columns]}")
 
                 df = df[relevant_cols].rename(columns=column_mapping)
                 if is_vienna:
@@ -246,12 +227,12 @@ def load_and_process_pupil_data(years):
     df_pupils['Students'] = df_pupils['Students'].replace('-', '0')
     df_pupils = df_pupils[df_pupils['Age'] != 'unknown']
     df_pupils = df_pupils[df_pupils['District'] != 'unbekannt <999>']
-    
+
     df_pupils['Age'] = df_pupils['Age'].replace({'under 6 years old': '5', '50 years old and more': '50'})
     df_pupils['Age'] = df_pupils['Age'].str.extract(r'(\d+)')[0]
     df_pupils['Age'] = pd.to_numeric(df_pupils['Age'], errors='coerce')
     df_pupils['Year'] = pd.to_numeric(df_pupils['Year'], errors='coerce')
-    
+
     original_district = df_pupils['District'].copy()
     df_pupils['District'] = df_pupils['District'].astype(str).str.extract(r'<(.*?)>', expand=False).fillna(original_district)
     df_pupils['Students'] = pd.to_numeric(df_pupils['Students'], errors='coerce')
@@ -323,13 +304,10 @@ def process_schooltype_data(df_pupils):
 
 
 def map_district_to_nuts3_stu_optimized(df_pupils, two_nuts3, district_to_nuts3, df_pop):
-    """Efficiently maps students from districts to NUTS3 regions."""
-    # 1. Single NUTS3 mappings
     single_nuts3_mask = ~df_pupils['District'].isin(two_nuts3.keys())
     single_nuts3_df = df_pupils.loc[single_nuts3_mask].copy()
     single_nuts3_df['NUTS3'] = single_nuts3_df['District'].map(district_to_nuts3)
 
-    # 2. Multi NUTS3 mappings
     multi_nuts3_df = df_pupils.loc[~single_nuts3_mask].copy()
     if multi_nuts3_df.empty:
         return single_nuts3_df
@@ -355,10 +333,6 @@ def process_students_optimized(df_pupils, two_nuts3, district_to_nuts3, df_pop):
     return grouped_df
 
 
-# ==========================================
-# 5. TEACHER DATA FUNCTIONS
-# ==========================================
-
 def process_teacher_data(years, file_template, vienna_replace_dict):
     print("--- Loading Teacher Data ---")
     df_list = []
@@ -381,15 +355,13 @@ def process_teacher_data(years, file_template, vienna_replace_dict):
             df['District'] = df['District'].astype(str).str.extract(r'<(.*?)>', expand=False).fillna(original_district)
             df_list.append(df)
         except Exception as e:
-            print(f"Error processing {file_path}: {e}")
+            raise RuntimeError(f"Error processing {file_path}") from e
 
     if not df_list:
         return pd.DataFrame()
 
     df_teachers = pd.concat(df_list, ignore_index=True)
 
-    # Simplified mapping for brevity (same as defined in process_teacher_data originally)
-    # Note: I am copying the logic from the original script exactly
     teacher_schooltype_mapping = {
         "Volksschulen": "Volksschulen",
         "Hauptschulen": "Mittelschulen", "Mittelschulen": "Mittelschulen", "Neue Mittelschulen": "Mittelschulen",
@@ -486,10 +458,6 @@ def process_teachers(df_teachers, two_nuts3, district_to_nuts3, df_pop):
     return grouped_nuts3, grouped_st
 
 
-# ==========================================
-# 6. RATIO & REDISTRIBUTION LOGIC
-# ==========================================
-
 def redistribute_students(df_tpers_nuts3, at_gdf):
     print("--- Redistributing Students (Zero Teacher Fix) ---")
     df_tpers_nuts3 = df_tpers_nuts3.copy()
@@ -506,7 +474,7 @@ def redistribute_students(df_tpers_nuts3, at_gdf):
         year, final_group, source_nuts3 = row['Year'], row['School_Type'], row['NUTS3']
         source_students = row['Students']
         source_geom = row['geometry']
-        
+
         if pd.isna(source_geom): continue
 
         first_neighbor_indices = list(at_gdf_sindex.intersection(source_geom.bounds))
@@ -527,9 +495,7 @@ def redistribute_students(df_tpers_nuts3, at_gdf):
                 df_tpers_nuts3.loc[idx, 'Students'] += source_students * first_valid_neighbors.loc[idx, 'weight']
             df_tpers_nuts3.loc[row.name, 'Students'] = 0
         else:
-            # Fallback logic omitted for brevity but follows original script (2nd neighbor, then all)
-            # In production, implementing the full depth is recommended if data is sparse
-            pass 
+            pass
 
     return df_tpers_nuts3.drop(columns='geometry')
 
@@ -548,7 +514,7 @@ def calculate_student_teacher_ratio(df_pupils_nuts3_age_cob, df_teachers_nuts3, 
     nuts3_cob_group_ratio['Student-to-teacher'] = np.where(nuts3_cob_group_ratio['Teachers'] > 0, nuts3_cob_group_ratio['Students'] / nuts3_cob_group_ratio['Teachers'], np.nan)
 
     final_group_nuts3_ratio = df_merged.groupby(['Year', 'School_Type', 'NUTS3']).agg({'Students': 'sum', 'Teachers': 'sum'}).reset_index()
-    final_group_nuts3_ratio['Teachers'] = final_group_nuts3_ratio['Teachers'] / 2 # aggregate correction
+    final_group_nuts3_ratio['Teachers'] = final_group_nuts3_ratio['Teachers'] / 2
     final_group_nuts3_ratio['Student-to-teacher'] = np.where(final_group_nuts3_ratio['Teachers'] > 0, final_group_nuts3_ratio['Students'] / final_group_nuts3_ratio['Teachers'], np.nan)
 
     final_group_ratio = df_merged.groupby(['Year', 'School_Type']).agg({'Students': 'sum', 'Teachers': 'sum'}).reset_index()
@@ -558,14 +524,9 @@ def calculate_student_teacher_ratio(df_pupils_nuts3_age_cob, df_teachers_nuts3, 
     return df_merged, nuts3_cob_group_ratio, final_group_nuts3_ratio, final_group_ratio
 
 
-# ==========================================
-# 7. ANALYSIS & PLOTTING FUNCTIONS
-# ==========================================
-
 def analyze_enrollment_ratios(df_pupils_nuts3_age_cob, df_pop):
     print("=== ENROLLMENT RATIO ANALYSIS ===")
-    
-    # 1. Create Age Map
+
     student_ages = sorted(df_pupils_nuts3_age_cob['Age'].unique())
     pop_ages = sorted(df_pop['Age'].unique())
     age_mapping = {}
@@ -580,7 +541,6 @@ def analyze_enrollment_ratios(df_pupils_nuts3_age_cob, df_pop):
             else:
                 age_mapping[student_age] = []
 
-    # 2. Aggregating Pop
     pop_expanded = []
     for student_age, pop_ages_list in age_mapping.items():
         if not pop_ages_list: continue
@@ -589,125 +549,65 @@ def analyze_enrollment_ratios(df_pupils_nuts3_age_cob, df_pop):
                 temp_df = df_pop[df_pop['Age'] == pop_age].copy()
                 temp_df['Student_Age_Group'] = student_age
                 pop_expanded.append(temp_df)
-    
+
     df_pop_grouped = pd.concat(pop_expanded, ignore_index=True)
     df_pop_agg = df_pop_grouped.groupby(['Year', 'NUTS3', 'Nationality', 'Student_Age_Group'])['Population'].sum().reset_index()
     df_pop_agg.rename(columns={'Student_Age_Group': 'Age'}, inplace=True)
 
-    # 3. Aggregating Students
     df_students_agg = df_pupils_nuts3_age_cob.groupby(['Year', 'NUTS3', 'Age', 'Nationality', 'School_Type'])['Students'].sum().reset_index()
 
-    # 4. Merge
     df_merged = df_students_agg.merge(df_pop_agg, on=['Year', 'NUTS3', 'Age', 'Nationality'], how='inner')
     df_merged['Enrollment_Ratio'] = df_merged['Students'] / df_merged['Population']
 
-    # 5. Stats
     print(f"Max ratio: {df_merged['Enrollment_Ratio'].max():.2f}")
-    
-    # 6. Basic Visualization
-    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-    axes[0,0].hist(df_merged['Enrollment_Ratio'], bins=50)
-    axes[0,0].set_title('Distribution of Enrollment Ratios')
-    
-    # ... (Other plots from original code would go here)
-    plt.tight_layout()
-    # plt.show() # Commented out for script execution, consider saving
-    
+
     return df_merged
 
-def plot_enrollment_ratio_grouped(df, group_col, filter_col, color_map, scenario=None):
-    """Refactored version of the plotting function"""
-    df_plot = df.copy()
-    if 'scenario' in df_plot.columns and scenario:
-        df_plot = df_plot[df_plot['scenario'] == scenario]
-
-    df_grouped = df_plot.groupby(['Year', group_col, filter_col]).agg({'Students': 'sum', 'Population': 'sum'}).reset_index()
-    df_grouped['Enrollment_ratio'] = df_grouped['Students'] / df_grouped['Population'].replace(0, float('nan'))
-    
-    unique_groups = sorted(df_grouped[group_col].unique())
-    cols = math.ceil(math.sqrt(len(unique_groups)))
-    rows = math.ceil(len(unique_groups) / cols)
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(15, 15), sharex=True, sharey=True)
-    if rows * cols > 1: axes = axes.flatten()
-    else: axes = [axes]
-    
-    for i, group in enumerate(unique_groups):
-        ax = axes[i]
-        df_group = df_grouped[df_grouped[group_col] == group]
-        for filter_val in sorted(df_group[filter_col].unique()):
-            sub = df_group[df_group[filter_col] == filter_val]
-            if not sub.empty:
-                ax.plot(sub['Year'], sub['Enrollment_ratio'], label=f'{filter_val}', 
-                        color=color_map.get(filter_val, 'gray'), marker='o')
-        ax.set_title(group)
-    
-    plt.tight_layout()
-    # plt.show()
-    print("Plot generated (suppressed display).")
-
-
-# ==========================================
-# 8. MAIN EXECUTION (Fixed)
-# ==========================================
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    
-    # Ensure output directories exist
+
     os.makedirs(PATH_OUTPUT_XLSX, exist_ok=True)
 
-    # 1. Load Data
     df_pop = get_population_data(YEARS)
     at_gdf = load_geometries()
-    
-    # 2. Process Pupils
+
     df_pupils = load_and_process_pupil_data(YEARS)
     if df_pupils.empty:
         print("Critical Error: No pupil data loaded. Exiting.")
-        return
-    
+        raise SystemExit(1)
+
     df_pupils = process_schooltype_data(df_pupils)
     df_pupils_nuts3_age_cob = process_students_optimized(df_pupils, TWO_NUTS3, DISTRICT_TO_NUTS3, df_pop)
-    
+
     print(f"Pupil Check 2015: {df_pupils_nuts3_age_cob[df_pupils_nuts3_age_cob['Year'] == 2015]['Students'].sum()}")
 
-    # 3. Process Teachers
     df_teachers = process_teacher_data(YEARS, PATH_TEACHER_TEMPLATE, VIENNA_REPLACE_DICT)
     if df_teachers.empty:
         print("Critical Warning: No teacher data loaded.")
-        # Create dummy DF structure if loading fails to prevent crash
         df_teachers_nuts3 = pd.DataFrame(columns=['Year', 'NUTS3', 'School_Type', 'Teachers'])
     else:
         df_teachers_nuts3, df_teachers_st = process_teachers(df_teachers, TWO_NUTS3, DISTRICT_TO_NUTS3, df_pop)
-    
-    # 4. Calculate Ratios
-    # Note: df_tpers_st (4th return) is not currently exported but we capture it to avoid errors
+
     df_merged, df_tpers_nuts3_cob, df_tpers_st_nuts3, df_tpers_st = calculate_student_teacher_ratio(
-        df_pupils_nuts3_age_cob, 
-        df_teachers_nuts3, 
-        redistribute_students, 
+        df_pupils_nuts3_age_cob,
+        df_teachers_nuts3,
+        redistribute_students,
         at_gdf
     )
-    
-    # 5. Fix Infinities and NaNs
-    # FIX: Loop through ALL dataframe outputs to ensure consistent zero-filling
+
     for df in [df_tpers_nuts3_cob, df_tpers_st_nuts3, df_tpers_st]:
         if 'Student-to-teacher' in df.columns:
-            # Replace Inf (div by zero) and NaN (0 div 0) with 0
             df['Student-to-teacher'] = df['Student-to-teacher'].replace([np.nan, np.inf], 0)
-    
-    # 6. Analyze Enrollment
+
     df_analysis = analyze_enrollment_ratios(df_pupils_nuts3_age_cob, df_pop)
-    
-    # 7. Exports
+
     print(f"--- Saving outputs to {PATH_OUTPUT_XLSX} ---")
-    
-    # Rename to match your requested '-notype' convention if needed, or keep original names
+
     df_analysis.to_csv(os.path.join(PATH_OUTPUT_XLSX, 'df_ratio_nuts3_cob_shift_mod-type.csv'), index=False)
     df_tpers_nuts3_cob.to_csv(os.path.join(PATH_OUTPUT_XLSX, 'df_tpers_nuts3_cob_mod-type.csv'), index=False)
     df_tpers_st_nuts3.to_csv(os.path.join(PATH_OUTPUT_XLSX, 'df_tpers_st_nuts3_mod-type.csv'), index=False)
-    
+
     print("Processing Complete.")
 
 if __name__ == "__main__":

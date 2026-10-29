@@ -1,56 +1,16 @@
-#!/usr/bin/env python
-"""
-Housing Demand Analysis — Per-Person Headship Rate Model
+"""Group quarters, headship and household formation rates by NUTS 3 region, age, sex and nationality for 2011, 2021 and 2022."""
 
-Pipeline:
-  1. Load & clean population data (NUTS3 × age × sex × nationality)
-  2. Load & clean dwelling data (housing census)
-  3. Load & clean non-private-household (institutional) population
-  4. Calculate Group Quarters Rate (GQR) with B-spline interpolation
-  5. Calculate headship rates at multiple aggregation levels
-  6. Compute Household Formation Rate (HHFR) = (1 − GQR) × headship_rate
-  7. Plot HHFR by 5-year age groups
-  8. Export results
-"""
-
-import math
-from io import BytesIO, StringIO
-
-import geopandas as gpd
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
-import requests
-import seaborn as sns
 from scipy.interpolate import CubicSpline, splev, splrep
-from scipy.stats import shapiro, ttest_rel, wilcoxon
 
-
-# =============================================================================
-# 1. DATA LOADING & CLEANING FUNCTIONS
-# =============================================================================
 
 def load_and_clean_population_data(file_path: str) -> pd.DataFrame:
-    """
-    Load and clean population data from a StatCube CSV export.
-
-    Args:
-        file_path: Path to the CSV file.
-
-    Returns:
-        Cleaned population DataFrame with columns:
-        [Year, NUTS3, Age, Sex, Nationality, Population]
-    """
     df = pd.read_csv(file_path, skiprows=8, encoding='latin-1')
 
-    # Truncate at the metadata footer
     symbol_index = df[df['Values'] == "Symbol"].index[0]
     df = df.iloc[:symbol_index]
 
-    # Clean the numeric column
     df['Number'] = df['Number'].replace('-', '0')
     df['Number'] = pd.to_numeric(df['Number'], errors='coerce').fillna(0)
 
@@ -59,15 +19,12 @@ def load_and_clean_population_data(file_path: str) -> pd.DataFrame:
         'Nationality', 'Population', 'Annotations', 'Unnamed',
     ]
 
-    # Filter out unclassifiable regions
     df = df[df['NUTS3'] != 'Not classifiable <0>']
 
     df['Year'] = df['Year'].astype(float)
 
-    # Extract NUTS3 code from angle brackets
     df['NUTS3'] = df['NUTS3'].str.extract(r'<(.*?)>')
 
-    # Harmonise age values
     df = df[df['Age'] != 'Not applicable']
     df['Age'] = df['Age'].replace({
         '100 plus years old': 100,
@@ -77,61 +34,88 @@ def load_and_clean_population_data(file_path: str) -> pd.DataFrame:
     df['Age'] = df['Age'].astype(str).str.replace(' years old', '')
     df['Age'] = pd.to_numeric(df['Age'], errors='coerce')
 
-    # Standardise sex labels
     df['Sex'] = df['Sex'].map({'male': 'M', 'female': 'F'})
 
     df = df.drop(columns=['Unnamed', 'Annotations', 'Values'], errors='ignore')
     return df
 
 
-def load_and_clean_nonprivate_data(file_path: str) -> pd.DataFrame:
-    """
-    Load and clean institutional (non-private) household population data.
+OCT_TOTAL_FILES = [
+    'Data/Statcube/register_persons_2011_2021-2011-2021_age_sex_ATF_nuts.csv',
+    'Data/Statcube/register_persons_2021_2024-2022_age_sex_ATF_nuts.csv',
+]
+OCT_PRIVATE_TEMPLATE = 'Data/Statcube/register_persons_{series}-{year}_nuts3_age_sex_private_{nat}.csv'
+OCT_SERIES = {2011: '2011_2021', 2021: '2011_2021', 2022: '2021_2024'}
+PRIVATE_LABELS = {'Private households', 'Persons living in a private household'}
 
-    Args:
-        file_path: Path to the CSV file.
 
-    Returns:
-        Cleaned DataFrame with columns:
-        [Year, NUTS3, Age, Sex, Nationality, NPPopulation]
-    """
-    df = pd.read_csv(file_path, skiprows=8, encoding='latin-1')
+def load_register_persons(file_path: str) -> pd.DataFrame:
+    df = pd.read_csv(file_path, skiprows=8, encoding='latin-1', dtype=str, keep_default_na=False)
+    df = df.iloc[:df.index[df['Counting'] == 'Symbol'][0]]
+    df = df[df['Counting'] == 'Persons']
 
-    symbol_index = df[df['Counting'] == "Symbol"].index[0]
-    df = df.iloc[:symbol_index]
+    for c in df.columns:
+        if c.startswith(('Type of household', 'Living arrangement')):
+            assert set(df[c]) <= PRIVATE_LABELS, (file_path, set(df[c]))
 
-    df['Number'] = df['Number'].replace('-', '0')
-    df['Number'] = pd.to_numeric(df['Number'], errors='coerce').fillna(0)
+    names = {'Year': 'Year', 'Age': 'Age', 'Sex': 'Sex', 'Citizenship': 'Nationality',
+             'Place of usual residence': 'NUTS3', 'Number': 'Persons'}
+    df = df.rename(columns={c: n for c in df.columns for p, n in names.items() if c.startswith(p)})
+    df = df[['Year', 'NUTS3', 'Age', 'Sex', 'Nationality', 'Persons']].copy()
 
-    df.columns = [
-        'Values', 'Year', 'NUTS3', 'Age', 'Sex', 'Type',
-        'Nationality', 'NPPopulation', 'Annotations', 'Unnamed',
-    ]
-
-    df = df[df['NUTS3'] != 'Not classifiable <0>']
+    df['Persons'] = pd.to_numeric(df['Persons'].replace('-', '0'))
     df['Year'] = df['Year'].astype(float)
-
-    # The 2011 census data uses 2012 for institutional households; remap.
-    df.loc[df['Year'] == 2012, 'Year'] = 2011
-
-    df['NUTS3'] = df['NUTS3'].str.extract(r'<(.*?)>')
-    df = df[df['Age'] != 'Not applicable']
-
+    df['NUTS3'] = df['NUTS3'].str.extract(r'<(AT\d{3})>', expand=False)
     df['Sex'] = df['Sex'].map({'Male': 'M', 'Female': 'F'})
     df['Nationality'] = df['Nationality'].replace({
         'Not Austria (incl. Stateless/Unsettled/Unknown)': 'Foreign country',
     })
-
-    df = df.drop(columns=['Unnamed', 'Annotations', 'Values', 'Type'], errors='ignore')
     return df
 
 
-# =============================================================================
-# 2. AGE-GROUP MAPPING HELPERS
-# =============================================================================
+def load_october_register() -> pd.DataFrame:
+    keys = ['Year', 'NUTS3', 'Age', 'Sex', 'Nationality']
+    tot = pd.concat([load_register_persons(f) for f in OCT_TOTAL_FILES], ignore_index=True)
+    priv = pd.concat(
+        [load_register_persons(OCT_PRIVATE_TEMPLATE.format(series=s, year=y, nat=n))
+         for y, s in OCT_SERIES.items() for n in ('AT', 'F')],
+        ignore_index=True,
+    )
+    df = tot.merge(priv, on=keys, how='outer', suffixes=('_total', '_private'), validate='one_to_one')
+    df = df.rename(columns={'Persons_total': 'Population', 'Persons_private': 'PrivatePopulation'})
+
+    assert set(df['Year']) == set(map(float, OCT_SERIES)), sorted(df['Year'].unique())
+    assert (df.groupby('Year').size() == 35 * 21 * 2 * 2).all()
+    assert df[['NUTS3', 'Sex', 'Population', 'PrivatePopulation']].notna().all().all()
+    assert (df['PrivatePopulation'] <= df['Population']).all()
+
+    df['NPPopulation'] = df['Population'] - df['PrivatePopulation']
+    return df
+
+
+def rescale_population_to_october(df_pop: pd.DataFrame, df_oct: pd.DataFrame) -> pd.DataFrame:
+    df = df_pop.copy()
+    df['Age_Group'] = df['Age'].apply(map_age_to_group).replace({'0 to 4 years': 'Under 5 years'})
+    keys = ['Year', 'NUTS3', 'Age_Group', 'Sex', 'Nationality']
+    target = df_oct.rename(columns={'Age': 'Age_Group'}).set_index(keys)['Population']
+    df['Target'] = target.reindex(pd.MultiIndex.from_frame(df[keys])).to_numpy()
+    assert df['Target'].notna().all(), 'population cell without a 31 October count'
+    assert len(df.drop_duplicates(keys)) == len(target), '31 October cell without population'
+
+    grp = df.groupby(keys)['Population']
+    jan_sum = grp.transform('sum')
+    n_ages = grp.transform('size')
+    df['Population'] = np.where(
+        jan_sum > 0,
+        df['Population'] * df['Target'] / jan_sum.where(jan_sum > 0, 1),
+        df['Target'] / n_ages,
+    )
+    check = df.groupby(keys)['Population'].sum().reindex(target.index)
+    assert np.allclose(check, target), 'rescaled groups differ from the 31 October counts'
+    return df.drop(columns=['Age_Group', 'Target'])
+
 
 def map_age_to_group(age) -> str:
-    """Map an integer age to a 5-year age-group string used by StatCube."""
     if pd.isna(age):
         return np.nan
     try:
@@ -142,7 +126,7 @@ def map_age_to_group(age) -> str:
     if age < 0:
         return np.nan
 
-    boundaries = list(range(0, 100, 5))  # [0, 5, 10, ..., 95]
+    boundaries = list(range(0, 100, 5))
     for low in boundaries:
         high = low + 4
         if low <= age <= high:
@@ -153,7 +137,6 @@ def map_age_to_group(age) -> str:
 
 
 def get_age_midpoint(age_group_str) -> float:
-    """Return the numerical midpoint for a StatCube age-group string."""
     if pd.isna(age_group_str) or not isinstance(age_group_str, str):
         return np.nan
     try:
@@ -171,7 +154,6 @@ def get_age_midpoint(age_group_str) -> float:
 
 
 def categorize_age(age: int) -> str:
-    """Categorise an individual age into the broad dwelling-census age groups."""
     if age < 15:
         return 'Under 15'
     elif age <= 29:
@@ -186,63 +168,28 @@ def categorize_age(age: int) -> str:
         return '85 years and over'
 
 
-def create_age_group_mapping() -> dict:
-    """Create a mapping from integer age (0–100) to 5-year age-group labels."""
-    age_to_group = {}
-    for age in range(0, 15):
-        age_to_group[age] = '0-14'
-    for start in range(15, 95, 5):
-        label = f"{start}-{start + 4}"
-        for age in range(start, start + 5):
-            age_to_group[age] = label
-    for age in range(95, 101):
-        age_to_group[age] = "95-100"
-    return age_to_group
-
-
-# =============================================================================
-# 3. GQR CALCULATION WITH SPLINE INTERPOLATION
-# =============================================================================
-
 def calculate_gqr_by_age_and_spline(
     df_np: pd.DataFrame,
     df_pop: pd.DataFrame,
     spline_ages: np.ndarray = np.arange(0, 101),
 ) -> pd.DataFrame:
-    """
-    Calculate Group Quarters Rate (GQR) per cohort with B-spline interpolation.
-
-    Computes age-group-level GQR from institutional-population and total-population
-    data, then interpolates smoothly across individual ages 0–100.
-
-    Args:
-        df_np:  Non-private household population (columns incl. NPPopulation).
-        df_pop: Total population (columns incl. Population, Age as int).
-        spline_ages: Array of integer ages for spline evaluation.
-
-    Returns:
-        DataFrame with columns:
-        [Year, NUTS3, Sex, Nationality, Age, GQR, GQPop, Population]
-    """
     df_np = df_np.copy()
     df_pop = df_pop.copy()
 
-    # Ensure integer years
     df_np['Year'] = pd.to_numeric(df_np['Year'], errors='coerce').astype('Int64')
     df_pop['Year'] = pd.to_numeric(df_pop['Year'], errors='coerce').astype('Int64')
     df_np = df_np.dropna(subset=['Year'])
     df_pop = df_pop.dropna(subset=['Year'])
 
-    # Standardise age columns to age-group strings
     df_pop['Age_Group'] = df_pop['Age'].apply(map_age_to_group)
     df_pop = df_pop.dropna(subset=['Age_Group'])
 
     df_np = df_np.rename(columns={'Age': 'Age_Group'})
     df_np = df_np.dropna(subset=['Age_Group'])
+    df_np['Age_Group'] = df_np['Age_Group'].replace({'Under 5 years': '0 to 4 years'})
 
     group_keys = ['Year', 'NUTS3', 'Age_Group', 'Sex', 'Nationality']
 
-    # Aggregate GQ population and total population
     gq_pop_summary = (
         df_np.groupby(group_keys, dropna=False)['NPPopulation']
         .sum().reset_index()
@@ -267,13 +214,11 @@ def calculate_gqr_by_age_and_spline(
     df_gqr_by_cohort['Age_Midpoint'] = df_gqr_by_cohort['Age_Group'].apply(get_age_midpoint)
     df_gqr_by_cohort = df_gqr_by_cohort.dropna(subset=['Age_Midpoint'])
 
-    # Lookup for exact population by individual age
     pop_lookup_by_age = (
         df_pop.set_index(['Year', 'NUTS3', 'Sex', 'Nationality', 'Age'])['Population']
         .to_dict()
     )
 
-    # B-spline interpolation per cohort
     splined_results = []
     spline_iter_keys = ['Year', 'NUTS3', 'Sex', 'Nationality']
 
@@ -288,7 +233,6 @@ def calculate_gqr_by_age_and_spline(
         x_values = spline_data['Age_Midpoint'].values
         y_values = spline_data['GQR_by_Age'].values
 
-        # Deduplicate x values
         _, unique_idx = np.unique(x_values, return_index=True)
         unique_idx = np.sort(unique_idx)
         x_unique = x_values[unique_idx]
@@ -342,26 +286,11 @@ def calculate_gqr_by_age_and_spline(
     return pd.DataFrame(splined_results)
 
 
-# =============================================================================
-# 4. HEADSHIP RATE CALCULATION & INTERPOLATION
-# =============================================================================
-
 def aggregate_and_calculate_headship_rate(
     df_dw: pd.DataFrame,
     df_pop: pd.DataFrame,
     grouping_vars: list[str],
 ) -> pd.DataFrame:
-    """
-    Aggregate dwelling & population data and compute the headship rate.
-
-    Args:
-        df_dw:  Dwelling counts with an 'Age_group' column.
-        df_pop: Private-household population with an 'Age_group' column.
-        grouping_vars: Columns to group by.
-
-    Returns:
-        Merged DataFrame with headship_rate (%).
-    """
     df_dw_agg = df_dw.groupby(grouping_vars, as_index=False)['Dwellings'].sum()
     df_pop_agg = df_pop.groupby(grouping_vars, as_index=False)['HHPopulation'].sum()
 
@@ -378,12 +307,6 @@ def interpolate_headship_rate(
     df_hs: pd.DataFrame,
     full_age_range: np.ndarray = np.arange(15, 101),
 ) -> pd.DataFrame:
-    """
-    Cubic-spline interpolation of headship rate over individual ages.
-
-    Uses age-group midpoints as knots and evaluates the spline at each
-    integer age in *full_age_range*.
-    """
     age_mapping = {
         "15 to 29 years": (15, 29),
         "30 to 49 years": (30, 49),
@@ -432,28 +355,10 @@ def interpolate_headship_rate(
     return pd.DataFrame(results)
 
 
-# =============================================================================
-# 5. HHFR MERGE HELPER
-# =============================================================================
-
 def calculate_hhfr_and_dwellings(
     df_base: pd.DataFrame,
     df_rate: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Merge a headship-rate table onto the base population/GQR table and
-    compute HHFR and dwelling counts.
-
-    HHFR  = (1 − GQR) × headship_rate
-    Dwellings = Population × HHFR / 100
-
-    Args:
-        df_base: Granular population/GQR table.
-        df_rate: Aggregated headship-rate table.
-
-    Returns:
-        Merged DataFrame with headship_rate, HHFR, and Dwellings columns.
-    """
     value_cols = {'headship_rate', 'Dwellings', 'HHPopulation'}
     merge_keys = list(set(df_rate.columns) - value_cols)
 
@@ -464,7 +369,6 @@ def calculate_hhfr_and_dwellings(
 
     df_merged = df_base.merge(df_rate[cols_to_merge], on=merge_keys, how='left')
 
-    # Ages < 15 have no headship → fill with 0
     df_merged.loc[
         (df_merged['Age'] < 15) & (df_merged['headship_rate'].isna()),
         'headship_rate',
@@ -476,90 +380,16 @@ def calculate_hhfr_and_dwellings(
     return df_merged
 
 
-# =============================================================================
-# 6. REPORTING HELPERS
-# =============================================================================
-
 def report_population_by_nationality_year(
     dataframe: pd.DataFrame, population_col: str, title: str,
 ) -> None:
-    """Print population totals grouped by year and nationality."""
     pop_by_nat_year = dataframe.groupby(['Year', 'Nationality'])[population_col].sum()
     print(f"\n--- {title} ---")
     for (year, nationality), count in pop_by_nat_year.items():
         print(f" - Year {year}, Nationality {nationality}: {count} people")
 
 
-# =============================================================================
-# 7. PLOTTING
-# =============================================================================
-
-def plot_headship_rate_subplots(df, group_col, filter_col, title_prefix, color_map):
-    """
-    Plot HHFR time-series by *group_col* facets, coloured by *filter_col*.
-
-    Internally maps individual ages to 5-year age groups for the subplot grid.
-    """
-    print("Applying 5-year 'AgeGroup' mapping for plotting...")
-    age_group_map = create_age_group_mapping()
-    df_plot = df.copy()
-    df_plot['AgeGroup'] = df_plot['Age'].map(age_group_map)
-    df_plot = df_plot.dropna(subset=['AgeGroup'])
-
-    unique_groups = df_plot[group_col].unique()
-    if all(isinstance(g, str) for g in unique_groups) and any('-' in g for g in unique_groups):
-        unique_groups = sorted(unique_groups, key=lambda x: int(x.split('-')[0]))
-
-    cols = math.ceil(math.sqrt(len(unique_groups)))
-    rows = math.ceil(len(unique_groups) / cols)
-
-    fig, axes = plt.subplots(rows, cols, figsize=(18, 15), sharex=True, sharey=True)
-    axes = axes.flatten()
-
-    df_plot['Year'] = pd.to_numeric(df_plot['Year'])
-
-    handles, labels = [], []
-    for i, group in enumerate(unique_groups):
-        ax = axes[i]
-        df_group = df_plot[df_plot[group_col] == group]
-
-        for fval in df_group[filter_col].unique():
-            df_filt = df_group[df_group[filter_col] == fval]
-            df_agg = df_filt.groupby('Year')['HHFR'].mean().reset_index().sort_values('Year')
-            line, = ax.plot(
-                df_agg['Year'], df_agg['HHFR'],
-                label=str(fval),
-                color=color_map.get(fval, 'gray'),
-                marker='o', markersize=3,
-            )
-            if fval not in labels:
-                handles.append(line)
-                labels.append(fval)
-
-        ax.set_title(f'{title_prefix}: {group}')
-        ax.set_xlabel('Year')
-        ax.set_ylabel('Headship Rate (HHFR)')
-        ax.grid(True, linestyle='--', alpha=0.6)
-
-    for j in range(len(unique_groups), len(axes)):
-        fig.delaxes(axes[j])
-
-    fig.legend(handles, labels, loc='center left', fontsize='medium',
-               bbox_to_anchor=(1.02, 0.5), borderaxespad=0)
-    plt.tight_layout()
-    plt.subplots_adjust(right=0.85)
-    plt.show()
-
-
-# =============================================================================
-# 8. MAIN PIPELINE
-# =============================================================================
-
-if __name__ == '__main__':
-
-    # -----------------------------------------------------------------
-    # 8a. Load population data
-    # -----------------------------------------------------------------
+def main():
     years = [2022, 2021, 2011]
     age_groups = ['0-74', '75-100']
     sexes = ['M', 'F']
@@ -582,16 +412,23 @@ if __name__ == '__main__':
         ['Year', 'NUTS3', 'Age', 'Sex', 'Nationality'], as_index=False
     )['Population'].sum()
 
+    df_oct = load_october_register()
+    jan_by_nat = df_pop.groupby(['Year', 'Nationality'])['Population'].sum()
+    df_pop = rescale_population_to_october(df_pop, df_oct)
+    oct_by_nat = df_pop.groupby(['Year', 'Nationality'])['Population'].sum()
+    print('Population moved from 1 January to 31 October (census date):')
+    print(pd.DataFrame({
+        '1 Jan': jan_by_nat, '31 Oct': oct_by_nat,
+        'change %': 100 * (oct_by_nat / jan_by_nat - 1),
+    }).round(2))
+
     df_pop.head()
     print('2022 population after cleaning dataset ', df_pop[df_pop['Year'] == 2022]['Population'].sum())
 
     df_pop.to_csv('Data/Statcube/cleaned_population_data_housing.csv', index=False)
 
-    # -----------------------------------------------------------------
-    # 8b. Load dwelling data
-    # -----------------------------------------------------------------
     df_dw = pd.read_csv(
-        r'Data/Statcube/housing_census_dwellings-2011-2021-2022_nuts3_age_Sex_ATF.csv',
+        r'Data/Statcube/housing_census_dwellings-2011-2021-2022_nuts3_age_sex_ATF.csv',
         skiprows=8, encoding='latin-1',
     )
     symbol_index = df_dw[df_dw['Counting'] == "Symbol"].index[0]
@@ -609,7 +446,6 @@ if __name__ == '__main__':
     df_dw['Year'] = df_dw['Year'].astype(float)
     df_dw['NUTS3'] = df_dw['NUTS3'].str.extract(r'<(.*?)>')
 
-    # Dwellings without usual residents have no household reference person
     df_dw = df_dw[df_dw['Age_group'] != 'Not applicable']
     df_dw['Nationality'] = df_dw['Nationality'].replace({
         'Not Austria (incl. Stateless/Unsettled/Unknown)': 'Foreign country',
@@ -627,46 +463,22 @@ if __name__ == '__main__':
     print(df_dw[df_dw['Nationality'] == 'Not applicable']['Dwellings'].sum())
     df_dw = df_dw[df_dw['Nationality'] != 'Not applicable']
 
-    # Report dwellings by nationality and year
     dwellings_by_nat_year = df_dw.groupby(['Year', 'Nationality'])['Dwellings'].sum()
     for (year, nationality), count in dwellings_by_nat_year.items():
         print(f" - Year {year}, Nationality {nationality}: {count} dwellings")
 
-    # -----------------------------------------------------------------
-    # 8c. Load non-private (institutional) household population
-    # -----------------------------------------------------------------
-    np_years = [2012, 2022, 2021]
-    np_file_template = "Data/Statcube/institutional_households-{year}_nuts3_agegroups_sex_{nat}.csv"
-
-    df_np = pd.DataFrame()
-    for year in np_years:
-        for nat in nats:
-            fpath = np_file_template.format(year=year, nat=nat)
-            df_np = pd.concat(
-                [df_np, load_and_clean_nonprivate_data(fpath)],
-                ignore_index=True,
-            )
-
-    df_np = df_np.groupby(
-        ['Year', 'NUTS3', 'Age', 'Sex', 'Nationality'], as_index=False
-    )['NPPopulation'].sum()
+    df_np = df_oct[['Year', 'NUTS3', 'Age', 'Sex', 'Nationality', 'NPPopulation']].copy()
     df_np.tail()
 
     np_pop_by_nat_year = df_np.groupby(['Year', 'Nationality'])['NPPopulation'].sum()
     for (year, nationality), count in np_pop_by_nat_year.items():
         print(f" - Year {year}, Nationality {nationality}: {count} peoople in non-private households")
 
-    # -----------------------------------------------------------------
-    # 8d. Calculate splined GQR
-    # -----------------------------------------------------------------
     df_splined_gqr = calculate_gqr_by_age_and_spline(df_np, df_pop)
     print(df_splined_gqr)
 
     df_splined_gqr[df_splined_gqr['Year'] == 2022]['Population'].sum()
 
-    # -----------------------------------------------------------------
-    # 8e. Prepare household population (total − institutional)
-    # -----------------------------------------------------------------
     df_pop_agroup = df_pop.copy()
     df_pop_agroup['Age_group'] = df_pop_agroup['Age'].apply(categorize_age)
     df_pop_agroup = df_pop_agroup.groupby(
@@ -693,7 +505,6 @@ if __name__ == '__main__':
     print("\nAggregated df_np_agroup head:")
     print(df_np_agroup.head())
 
-    # Merge population and non-private population
     df_hhpop = pd.merge(
         df_pop_agroup, df_np_agroup,
         on=['Year', 'NUTS3', 'Age_group', 'Sex', 'Nationality'],
@@ -703,13 +514,7 @@ if __name__ == '__main__':
     df_hhpop['NPPopulation'] = df_hhpop['NPPopulation'].fillna(0)
     df_hhpop['Total_population'] = df_hhpop['Total_population'].fillna(0)
 
-    # For 2011 census the population already excludes institutional HHs
-    df_hhpop['HHPopulation'] = df_hhpop.apply(
-        lambda row: row['Total_population']
-        if row['Year'] == 2011
-        else row['Total_population'] - row['NPPopulation'],
-        axis=1,
-    )
+    df_hhpop['HHPopulation'] = df_hhpop['Total_population'] - df_hhpop['NPPopulation']
     print("\ndf_hhpop head after merging and calculation:")
     print(df_hhpop.head())
 
@@ -722,9 +527,6 @@ if __name__ == '__main__':
         'Total Population by Nationality and Year (Before Non-Private Households Adjustment)',
     )
 
-    # -----------------------------------------------------------------
-    # 8f. Headship rates at multiple aggregation levels
-    # -----------------------------------------------------------------
     aggregations = {
         'df_hs':           ['Year', 'Age_group', 'NUTS3', 'Sex', 'Nationality'],
         'df_hs_age_cob':   ['Year', 'Age_group', 'Nationality'],
@@ -761,9 +563,6 @@ if __name__ == '__main__':
     df_hs_Sex = results['df_hs_Sex']
     print("\nAll aggregations and interpolations complete.")
 
-    # -----------------------------------------------------------------
-    # 8g. Merge population with headship rates → full per-person table
-    # -----------------------------------------------------------------
     df_hs_np = df_splined_gqr[
         ['Year', 'NUTS3', 'Nationality', 'Age', 'Sex', 'Population', 'GQPop', 'GQR']
     ].merge(
@@ -781,11 +580,6 @@ if __name__ == '__main__':
         * (df_hs_np['headship_rate'] / 100)
     )
 
-    # -----------------------------------------------------------------
-    # 8h. HHFR variants at different aggregation levels
-    # -----------------------------------------------------------------
-
-    # --- 2-Variable ---
     df_hs_age_cob_np = calculate_hhfr_and_dwellings(
         df_base=df_splined_gqr, df_rate=results['df_hs_age_cob'],
     )
@@ -799,7 +593,6 @@ if __name__ == '__main__':
         df_base=df_splined_gqr, df_rate=results['df_hs_nuts3_age'],
     )
 
-    # --- 1-Variable ---
     df_hs_age_np = calculate_hhfr_and_dwellings(
         df_base=df_splined_gqr, df_rate=results['df_hs_age'],
     )
@@ -810,25 +603,11 @@ if __name__ == '__main__':
         df_base=df_splined_gqr, df_rate=results['df_hs_cob'],
     )
 
-    # -----------------------------------------------------------------
-    # 8i. Household Formation Rate on the main table
-    # -----------------------------------------------------------------
     df_hs_np['HHFR'] = (1 - df_hs_np['GQR']) * df_hs_np['headship_rate']
     df_hs_np.head()
 
-    # -----------------------------------------------------------------
-    # 8j. Plot HHFR by 5-year age group
-    # -----------------------------------------------------------------
-    print("Plotting data from df_hs_np (your original historical data)")
-    plot_headship_rate_subplots(
-        df=df_hs_np,
-        group_col='AgeGroup',
-        filter_col='Nationality',
-        title_prefix='HHFR by 5-Year Age Group (from df_hs_np)',
-        color_map={'Austria': 'blue', 'Foreign country': 'green'},
-    )
-
-    # -----------------------------------------------------------------
-    # 8k. Export
-    # -----------------------------------------------------------------
     df_hs_np.to_csv(r'XLSX/df_hs_np_clean.csv', index=False)
+
+
+if __name__ == '__main__':
+    main()
