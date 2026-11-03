@@ -35,12 +35,11 @@ os.makedirs(os.path.dirname(PATHS['output_csv']), exist_ok=True)
 def load_and_calculate_metrics():
     print("Processing...")
     print("   Loading raw files...")
-    edu_df = pd.read_parquet(PATHS['edu'])
-    hous_df = pd.read_parquet(PATHS['hous'])
-    health_df = pd.read_parquet(PATHS['health'])
+    edu_df = pd.read_parquet(PATHS['edu'], columns=['Year', 'Nationality', 'scenario', 'Demand_teachers'])
+    hous_df = pd.read_parquet(PATHS['hous'], columns=['Year', 'Nationality', 'scenario', 'Dwellings'])
 
     try:
-        pop_master_df = pd.read_parquet(PATHS['pop'])
+        pop_master_df = pd.read_parquet(PATHS['pop'], columns=['TIME_PERIOD', 'OBS_VALUE', 'age', 'Nationality', 'scenario'])
         if len(pop_master_df.columns) <= 2: raise ValueError("Likely wrong delimiter")
     except:
         print("   Standard CSV read failed, trying with semi-colon separator...")
@@ -90,9 +89,14 @@ def load_and_calculate_metrics():
     print("   Merging datasets (Scenario Level)...")
     edu_processed = process_service_scenarios(edu_df, 'Education', 'Demand_teachers', exclude_patterns=['historic', 'extrapolated'])
     hous_processed = process_service_scenarios(hous_df, 'Housing', 'Dwellings')
-    health_processed = process_service_scenarios(health_df, 'Healthcare', 'Bed_Days_Mean', year_col='year')
+    processed = [edu_processed, hous_processed]
+    if os.path.exists(PATHS['health']):
+        health_df = pd.read_parquet(PATHS['health'], columns=['year', 'Nationality', 'scenario', 'Bed_Days_Mean'])
+        processed.append(process_service_scenarios(health_df, 'Healthcare', 'Bed_Days_Mean', year_col='year'))
+    else:
+        print(f"   {PATHS['health']} not found: healthcare skipped (see README).")
 
-    all_scenarios = pd.concat([edu_processed, hous_processed, health_processed], ignore_index=True)
+    all_scenarios = pd.concat(processed, ignore_index=True).astype({'Demand': 'float64'})
     all_scenarios = all_scenarios.dropna(subset=['Master_Pop_Total', 'Global_Pop'])
 
     print("   Calculating metrics per scenario...")

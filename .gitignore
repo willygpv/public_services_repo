@@ -6,6 +6,7 @@ PNG/
 logs/
 temp_teacher_projection/
 __pycache__/
+.venv/
 
-# Licensed hospital data: never commit
+# Hospital data: never commit
 *patient*

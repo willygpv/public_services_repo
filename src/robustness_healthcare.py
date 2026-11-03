@@ -1,4 +1,4 @@
-"""Robustness tests of the hospital bed-day model. Needs the licensed patient file (see README)."""
+"""Robustness tests of the hospital bed-day model. Needs the patient file (see README)."""
 
 import warnings
 import numpy as np

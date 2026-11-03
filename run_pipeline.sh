@@ -2,10 +2,12 @@
 # Runs all steps in order from the repository root. Logs go to logs/.
 # Usage: bash run_pipeline.sh   (or PY=/path/to/python bash run_pipeline.sh)
 # ROBUSTNESS=1 bash run_pipeline.sh also runs the robustness tests.
+# Without the hospital file the hospital steps are skipped and the rest still runs (see README).
 
 set -u
 cd "$(dirname "$0")"
 PY="${PY:-python}"
+PATIENTS=XLSX/patients_full_factorial_2019.csv.gz
 export PYTHONIOENCODING=utf-8
 mkdir -p logs PQT XLSX CSV
 
@@ -34,9 +36,9 @@ fi
 n=0
 for s in "${STEPS[@]}"; do
   n=$((n + 1))
-  if [ "$s" = "model_healthcare_demand" ] && [ ! -f XLSX/patients_full_factorial_2019.csv.gz ]; then
-    echo "XLSX/patients_full_factorial_2019.csv.gz not found. The hospital model and the steps after it need this file (see README)."
-    exit 1
+  if { [ "$s" = "model_healthcare_demand" ] || [ "$s" = "robustness_healthcare" ]; } && [ ! -f "$PATIENTS" ]; then
+    echo "[$(date +%H:%M:%S)] $s skipped: $PATIENTS not found (see README)"
+    continue
   fi
   log=$(printf 'logs/%02d_%s.log' "$n" "$s")
   start=$(date +%s)
@@ -47,3 +49,8 @@ for s in "${STEPS[@]}"; do
   fi
   echo "    done in $(( $(date +%s) - start ))s"
 done
+
+echo "Finished. Summary tables: logs/16_generate_summary_tables.log"
+if [ ! -f "$PATIENTS" ]; then
+  echo "The hospital steps were skipped, so the tables have no healthcare results (see README)."
+fi

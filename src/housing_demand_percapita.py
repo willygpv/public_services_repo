@@ -425,8 +425,6 @@ def main():
     df_pop.head()
     print('2022 population after cleaning dataset ', df_pop[df_pop['Year'] == 2022]['Population'].sum())
 
-    df_pop.to_csv('Data/Statcube/cleaned_population_data_housing.csv', index=False)
-
     df_dw = pd.read_csv(
         r'Data/Statcube/housing_census_dwellings-2011-2021-2022_nuts3_age_sex_ATF.csv',
         skiprows=8, encoding='latin-1',

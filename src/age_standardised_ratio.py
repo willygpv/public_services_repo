@@ -3,6 +3,8 @@
 import config
 import glm_cov
 
+import os
+
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
@@ -212,13 +214,18 @@ def healthcare_refit():
 def main():
     (h_res, h_prof) = housing()
     (e_res, e_prof) = education()
-    (c_res, c_prof) = healthcare_from_parquet()
-    r_res = healthcare_refit()
+    rows = [h_res, e_res]
+    sectors = ['Housing', 'Education']
+    if os.path.exists(HEALTH_RAW):
+        (c_res, c_prof) = healthcare_from_parquet()
+        r_res = healthcare_refit()
+        rows += [c_res, r_res]
+        sectors += ['Healthcare', 'Healthcare (refit)']
+    else:
+        print(f'\n{HEALTH_RAW} not found: healthcare ratios skipped (see README).')
 
-    rows = [h_res, e_res, c_res, r_res]
     summary = pd.DataFrame(rows)
-    summary['sector_short'] = ['Housing', 'Education', 'Healthcare',
-                               'Healthcare (refit)']
+    summary['sector_short'] = sectors
 
     print('\n' + '=' * 84)
     print('AGE-STANDARDISED FOREIGN/AUSTRIAN UTILISATION RATIO')

@@ -1,4 +1,4 @@
-"""Poisson model of hospital bed-days on the 2019 patient data and projected bed-day demand. Needs the licensed patient file (see README)."""
+"""Poisson model of hospital bed-days on the 2019 patient data and projected bed-day demand. Needs the patient file (see README)."""
 
 import numpy as np
 import pandas as pd

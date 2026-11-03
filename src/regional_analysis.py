@@ -30,7 +30,7 @@ def run_regional_analysis():
 
     print("   Loading population...")
     try:
-        pop_df = pd.read_parquet(PATHS['pop'])
+        pop_df = pd.read_parquet(PATHS['pop'], columns=['TIME_PERIOD', 'OBS_VALUE', 'geo', 'Nationality', 'scenario'])
         if len(pop_df.columns) < 3: pop_df = pd.read_csv(PATHS['pop'], sep=';')
     except:
         pop_df = pd.read_csv(PATHS['pop'], sep=';')
@@ -59,10 +59,12 @@ def run_regional_analysis():
 
     def process_service(path, service_name, value_col, geo_col_in_file):
         print(f"   Processing {service_name}...")
-        df = pd.read_parquet(path)
+        year_col = 'year' if service_name == 'Healthcare' else 'Year'
+        df = pd.read_parquet(path, columns=[year_col, geo_col_in_file, 'Nationality', 'scenario', value_col])
         if 'year' in df.columns: df = df.rename(columns={'year': 'Year'})
         df = df[df['Year'] >= 2025].copy()
         df = df.rename(columns={geo_col_in_file: 'Region_Code'})
+        df = df.groupby(['Year', 'Region_Code', 'Nationality', 'scenario'], observed=True)[value_col].sum().reset_index()
 
         if AGGREGATION_MODE == 'NUTS2' or service_name == 'Healthcare':
             df['Region_Code'] = df['Region_Code'].apply(get_nuts2)
@@ -99,9 +101,13 @@ def run_regional_analysis():
 
     d_edu = process_service(PATHS['edu'], 'Education', 'Demand_teachers', 'NUTS3')
     d_hous = process_service(PATHS['hous'], 'Housing', 'Dwellings', 'NUTS3')
-    d_health = process_service(PATHS['health'], 'Healthcare', 'Bed_Days_Mean', 'NUTS2')
+    services = [d_edu, d_hous]
+    if os.path.exists(PATHS['health']):
+        services.append(process_service(PATHS['health'], 'Healthcare', 'Bed_Days_Mean', 'NUTS2'))
+    else:
+        print(f"   {PATHS['health']} not found: healthcare skipped (see README).")
 
-    master_df = pd.concat([d_edu, d_hous, d_health], ignore_index=True)
+    master_df = pd.concat(services, ignore_index=True).astype({'Demand': 'float64', 'D0': 'float64'})
 
     print("   Calculating Decomposition...")
     sq_mask = master_df['scenario'].str.contains('statusquo|sq', case=False)

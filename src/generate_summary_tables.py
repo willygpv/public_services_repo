@@ -373,7 +373,7 @@ def table_regional_contribution_waterfall(df):
     print(f"{'Sector':<12} {'Region':<15} {'Volume':>25} {'Behavior':>25} {'Structure':>25} {'Net Impact':>30}")
     print("-" * 140)
 
-    for sector in ['Education', 'Healthcare', 'Housing']:
+    for sector in res_df['Sector'].unique():
         subset = res_df[res_df['Sector'] == sector].sort_values('Net_Val', ascending=False)
         print(f"** {sector} **")
         for _, row in subset.iterrows():
@@ -384,6 +384,8 @@ def table_regional_contribution_waterfall(df):
 def main():
     df, df_pop = load_data()
     if df is not None:
+        if 'Healthcare' not in df['Service'].unique():
+            print("Healthcare results are not available: the hospital steps need the hospital file (see README).")
         table_1_summary(df)
         table_2_group_decomp(df)
         table_3_waterfall_text(df)
