@@ -1,0 +1,5 @@
+sector,crude,asr_total_std,asr_austrian_std,age_factor,asr_ci_low,asr_ci_high,asr_observed,sector_short
+housing (dwellings per capita),0.849,0.959,0.955,0.885,,,,Housing
+education (FTE teachers per capita),1.076,0.951,0.951,1.132,,,,Education
+"healthcare (bed-days per capita, from parquet)",0.358,0.616,0.612,0.581,,,,Healthcare
+"healthcare (bed-days per capita, exact GLM refit)",0.363,0.623,0.62,0.582,0.605,0.642,0.623,Healthcare (refit)

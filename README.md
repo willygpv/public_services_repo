@@ -33,7 +33,7 @@ This runs the scripts in `src/` in order on the data in `Data/`, which also serv
 
 ## With and without the hospital file
 
-The hospital model uses the 2019 inpatient records of the Austrian Federal Ministry of Health. These records are protected and are not included here, and neither is anything estimated from them. Researchers need an individual arrangement with the Ministry to use them. With the file saved as `XLSX/patients_full_factorial_2019.csv.gz`, the whole pipeline runs. Without it, the hospital steps are skipped with a message and everything else still runs.
+The hospital model uses the 2019 inpatient records of the Austrian Federal Ministry of Health. These records are protected and are not included here. Researchers need an individual arrangement with the Ministry to use them. With the file saved as `XLSX/patients_full_factorial_2019.csv.gz`, the whole pipeline runs. Without it, the hospital steps are skipped with a message and everything else still runs.
 
 | Results | Without the file | With the file |
 |---|---|---|
@@ -41,6 +41,14 @@ The hospital model uses the 2019 inpatient records of the Austrian Federal Minis
 | Decomposition, regional regressions, summary tables | housing and education | all three sectors |
 | Age-standardised ratios | housing and education | all three sectors |
 | Hospital bed projection, `Healthcare` rows and columns, hospital robustness tests | no | yes |
+
+## Results of the full run
+
+`results/` holds results of a run with the hospital file, so that the hospital results can be read without the records. They cannot be regenerated without the records. Nothing here is broken down by age or sex, and finer hospital results are not included.
+
+- `summary_tables.txt`: Tables 1 to 6 for all three sectors, as in `logs/16_generate_summary_tables.log`
+- `age_standardised_ratio_summary.csv`: age-standardised ratios, rounded to three decimals
+- `regression_statistics_MIXED.csv`, `growth_vs_growth_stats_MIXED.csv`, `temporal_regression_stats_MIXED.csv`, `temporal_growth_growth_stats_MIXED.csv`: regional regressions, rounded to four decimals
 
 ## Expected results
 
