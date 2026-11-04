@@ -7,7 +7,7 @@ Code and input data to project the dwellings, teachers and hospital beds needed 
 - Python 3.12. Python 3.13 does not work: the pinned packages have no wheels for it, and the install stops when SciPy tries to build from source.
 - bash (on Windows, Git Bash).
 - At least 16 GB of RAM (peak use 13 GB), or 24 GB with the hospital file (peak use 19 GB). 3 GB of free disk space. No special hardware.
-- Tested from a clean clone on a Windows 11 laptop with Python 3.12, 16 cores and 31 GB of RAM. Not yet run on Linux or macOS, although the pinned packages have wheels for both.
+- Tested from a clean clone on a Windows 11 laptop with Python 3.12, 16 cores and 31 GB of RAM. Not yet run on Linux or macOS, although the pinned packages have wheels for both. The run times below are from that laptop and can double when it is busy with other work.
 
 ## Installation
 
@@ -78,7 +78,7 @@ python src/sensitivity_scenarios.py
 bash run_sensitivity_naturalisation.sh
 ```
 
-`sensitivity_scenarios.py` takes under a minute and writes nothing: it applies the changes to the outputs of the main run and prints the results. `run_sensitivity_naturalisation.sh` doubles the naturalisation rates from 2025, re-runs the foreign population projection and the sector models on a copy in `sensitivity_naturalisation/`, and writes the results to `logs/sensitivity_naturalisation.log`. It takes about 30 minutes and needs about 3 GB of disk space more. The main results stay as they are.
+`sensitivity_scenarios.py` takes about a minute and writes nothing: it applies the changes to the outputs of the main run and prints the results. `run_sensitivity_naturalisation.sh` doubles the naturalisation rates from 2025, re-runs the foreign population projection and the sector models on a copy in `sensitivity_naturalisation/`, and writes the results to `logs/sensitivity_naturalisation.log`. It takes about 30 minutes and needs about 3 GB of disk space more. The main results stay as they are.
 
 Without the hospital file, the bed-day scenario and the healthcare lines are skipped.
 
