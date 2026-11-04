@@ -5,6 +5,7 @@ CSV/
 PNG/
 logs/
 temp_teacher_projection/
+sensitivity_naturalisation/
 __pycache__/
 .venv/
 

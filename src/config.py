@@ -1,7 +1,14 @@
 """File names shared by the pipeline scripts. Run every script from the repository root."""
 
-PROJECTION_VINTAGE = '20261023'
-TOTAL_POPULATION_VINTAGE = PROJECTION_VINTAGE
+import os
+
+# run_sensitivity_naturalisation.sh sets these three for its own copy of the outputs.
+# The defaults are the main run, which applies the naturalisation rates unchanged.
+MAIN_VINTAGE = '20261023'
+PROJECTION_VINTAGE = os.environ.get('PROJECTION_VINTAGE') or MAIN_VINTAGE
+TOTAL_POPULATION_VINTAGE = os.environ.get('TOTAL_POPULATION_VINTAGE') or PROJECTION_VINTAGE
+NAT_RATE_MULT = float(os.environ.get('NAT_RATE_MULT') or 1)
+
 MIGRATION_SCENARIOS_STAMP = '20251203_123931'
 
 MIGRANT_STEM = f'negtest_projected_mig_EU_2025_2051_h61_{PROJECTION_VINTAGE}_adjfert'

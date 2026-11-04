@@ -69,6 +69,33 @@ Values are medians with the range across migration scenarios. `Table 1` and `Tab
 | With the file: Vienna, healthcare growth, % | +29.5 [+26.4, +32.6] | `Table 5`, Vienna |
 | With the file: age-standardised ratio, healthcare | 0.62 [0.60, 0.64] | `logs/13_age_standardised_ratio.log`, exact GLM refit |
 
+## Sensitivity scenarios
+
+After `run_pipeline.sh`, these commands reproduce Supplementary Table 9. They test how far the results depend on the assumed utilisation rates.
+
+```bash
+python src/sensitivity_scenarios.py
+bash run_sensitivity_naturalisation.sh
+```
+
+`sensitivity_scenarios.py` takes under a minute and writes nothing: it applies the changes to the outputs of the main run and prints the results. `run_sensitivity_naturalisation.sh` doubles the naturalisation rates from 2025, re-runs the foreign population projection and the sector models on a copy in `sensitivity_naturalisation/`, and writes the results to `logs/sensitivity_naturalisation.log`. It takes about 30 minutes and needs about 3 GB of disk space more. The main results stay as they are.
+
+Without the hospital file, the bed-day scenario and the healthcare lines are skipped.
+
+Values are medians with the range across migration scenarios.
+
+| Scenario | Sector | Demand change 2025-2050, % | Foreign share of demand 2050, % |
+|---|---|---|---|
+| Main projection | Housing | +9.9 [+6.9, +13.0] | 27.7 [25.7, 29.6] |
+| Main projection | Education | -11.0 [-15.4, -6.5] | 30.2 [27.0, 33.2] |
+| Household formation rate at ages 20-34, -10% | Housing | +8.6 [+5.7, +11.7] | 27.6 [25.7, 29.5] |
+| Student-to-teacher ratio, +10% | Education | -19.1 [-23.0, -15.0] | 30.2 [27.0, 33.2] |
+| Naturalisation rates, x2 | Housing | +10.1 [+7.1, +13.2] | 24.8 [23.0, 26.6] |
+| Naturalisation rates, x2 | Education | -10.7 [-15.1, -6.2] | 25.1 [22.3, 27.8] |
+| With the file: main projection | Healthcare | +26.6 [+25.1, +28.1] | 14.8 [13.9, 15.7] |
+| With the file: bed-day rates, -10% | Healthcare | +13.9 [+12.6, +15.3] | 14.8 [13.9, 15.7] |
+| With the file: naturalisation rates, x2 | Healthcare | +27.4 [+25.8, +28.9] | 13.5 [12.7, 14.4] |
+
 ## Scripts
 
 1. `prepare_population_inputs.py`: start populations
@@ -85,6 +112,7 @@ Values are medians with the range across migration scenarios. `Table 1` and `Tab
 12. `demand_decomposition.py`, `regional_analysis.py`: decomposition of demand growth and regional regressions
 13. `generate_summary_tables.py`: summary tables
 14. `robustness_housing.py`, `robustness_education.py`, `robustness_healthcare.py`: robustness tests, results in their logs (`robustness_healthcare.py` needs the hospital file)
+15. `sensitivity_scenarios.py`, `sensitivity_naturalisation_summary.py`, `sensitivity_naturalisation_decomposition.py`: sensitivity scenarios of Supplementary Table 9 (not part of `run_pipeline.sh`, see above)
 
 `config.py` holds the file names, and `glm_cov.py` and `oerok_projection.py` are used by the models.
 

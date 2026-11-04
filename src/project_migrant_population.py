@@ -167,6 +167,8 @@ def project_population(
 
             nat_idx = pd.MultiIndex.from_frame(pop[['geo', 'sex', 'age_int']])
             nat_rates = nat.reindex(nat_idx).fillna(0).values
+            if config.NAT_RATE_MULT != 1:
+                nat_rates = np.clip(nat_rates * config.NAT_RATE_MULT, 0.0, 1.0)
             pop['naturalizations'] = pop['pop_after_mig'] * nat_rates
             pop['pop_after_nat'] = pop['pop_after_mig'] - pop['naturalizations']
             total_naturalizations = pop['naturalizations'].sum()
@@ -392,6 +394,10 @@ def frange(start, stop, step):
     return [round(start + i * step, 2) for i in range(int((stop - start) / step) + 1)]
 
 def main():
+    if config.NAT_RATE_MULT != 1:
+        if config.PROJECTION_VINTAGE == config.MAIN_VINTAGE:
+            raise RuntimeError('NAT_RATE_MULT needs its own PROJECTION_VINTAGE: use run_sensitivity_naturalisation.sh')
+        print(f'Naturalisation sensitivity: rates x {config.NAT_RATE_MULT}')
     df_init_pop, df_mig, df_m, df_f_eu, df_sr, df_nat, tot_df = load_and_prep_data()
 
     homophily_values = [0.61]
